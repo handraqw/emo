@@ -12,7 +12,7 @@ from face_detector import FaceDetector
 from face_model.inference_face_emotion import FaceEmotionInference
 from face_preprocess import preprocess_face
 from face_tracker import FaceTracker
-from fusion_engine import FusionWeights, fuse_signals
+from fusion_engine import FusionDecision, FusionWeights, fuse_signals
 from speech_to_text import SpeechToTextService
 from text_toxicity import TextToxicityAnalyzer
 from utils.schemas import SpeechSegment
@@ -22,6 +22,12 @@ from voice_emotion import VoiceEmotionAnalyzer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 LOGGER = logging.getLogger(__name__)
+
+# Slightly favor the newest frame while keeping enough history to reduce emotion flicker.
+FACE_SMOOTHING_WEIGHT = 0.68
+DECISION_SMOOTHING_WEIGHT = 0.7
+# RGBA overlay color used to dim the inactive part of the three-zone audio meter.
+AUDIO_METER_OVERLAY = (15, 23, 42, 170)
 
 
 def _choose_segment(segments, timestamp_ms: int):
@@ -33,19 +39,89 @@ def _choose_segment(segments, timestamp_ms: int):
     return segments[-1]
 
 
+def _audio_level_from_segment(segment: SpeechSegment) -> float:
+    features = segment.metadata.get("voice_features", {})
+    return round(min(max(float(features.get("energy", 0.0)), 0.0), 1.0), 2)
+
+
+def _smooth_scores(
+    current_scores: dict[str, float],
+    previous_scores: dict[str, float] | None,
+    current_weight: float = FACE_SMOOTHING_WEIGHT,
+) -> dict[str, float]:
+    if not previous_scores:
+        total = sum(current_scores.values()) or 1.0
+        return {label: round(value / total, 4) for label, value in current_scores.items()}
+
+    smoothed = {}
+    all_labels = set(current_scores) | set(previous_scores)
+    for label in all_labels:
+        current = float(current_scores.get(label, 0.0))
+        previous = float(previous_scores.get(label, 0.0))
+        smoothed[label] = current * current_weight + previous * (1.0 - current_weight)
+    total = sum(smoothed.values()) or 1.0
+    return {label: round(value / total, 4) for label, value in smoothed.items()}
+
+
+def _build_smoothed_decision(
+    decision: FusionDecision,
+    previous_scores: dict[str, float] | None,
+) -> FusionDecision:
+    if decision.final_emotion == "CONFLICT":
+        return decision
+    combined_scores = _smooth_scores(
+        decision.combined_scores, previous_scores, current_weight=DECISION_SMOOTHING_WEIGHT
+    )
+    final_emotion = max(combined_scores, key=combined_scores.get)
+    return FusionDecision(final_emotion, combined_scores, decision.triggered_rules)
+
+
+def _display_audio_level(record: dict, microphone_level: float = 0.0, source: str = "file") -> float:
+    record_level = float(record.get("audio_level", 0.0))
+    live_level = microphone_level if source == "camera" else 0.0
+    return max(record_level, live_level)
+
+
 def _render_html_preview(records: list[dict], output_path: Path, source_ref: str | None) -> None:
     stats = _collect_run_stats(records, source_ref=source_ref)
     latest = records[-1] if records else {}
+    subtitle_text = html.escape(str(latest.get("speech_text", "") or "Субтитры появятся после распознавания речи"))
+    audio_percent = int(min(max(float(latest.get("audio_level", 0.0)), 0.0), 1.0) * 100)
+    source_path = Path(source_ref) if source_ref else None
+    is_video_source = bool(
+        source_path
+        and source_path.exists()
+        and source_path.suffix.lower() in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+    )
     rows = "\n".join(
         (
             "<tr>"
             f"<td>{item['timestamp_ms']}</td>"
             f"<td>{html.escape(str(item['face_emotion']))}</td>"
             f"<td>{html.escape(str(item['speech_text']))}</td>"
+            f"<td>{int(float(item.get('audio_level', 0.0)) * 100)}%</td>"
             f"<td>{html.escape(str(item['final_emotion']))}</td>"
             "</tr>"
         )
         for item in records
+    )
+    video_markup = (
+        f"""
+      <div class='video-shell'>
+        <video id='source-video' class='video-player' controls preload='metadata' src='{source_path.as_uri()}'></video>
+        <div class='transport'>
+          <button type='button' onclick=\"const video=document.getElementById('source-video'); video.paused ? video.play() : video.pause();\">Пауза / продолжить</button>
+          <button type='button' onclick=\"const video=document.getElementById('source-video'); video.currentTime = 0; video.play();\">С начала</button>
+        </div>
+      </div>
+        """
+        if is_video_source
+        else f"""
+      <div class='video'>
+        <div class='bbox'></div>
+        <div class='badge'>Face emotion: {html.escape(str(latest.get('face_emotion', 'N/A')))} ({latest.get('face_confidence', 0.0)})</div>
+      </div>
+        """
     )
     html_content = f"""<!DOCTYPE html>
 <html lang='ru'>
@@ -57,8 +133,19 @@ body {{ font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #
 .app {{ display: grid; grid-template-columns: 2fr 1fr; min-height: 100vh; }}
 .preview {{ padding: 24px; }}
 .video {{ height: 420px; border-radius: 16px; background: linear-gradient(135deg, #1d4ed8, #0f766e); position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.35); }}
+.video-shell {{ display: grid; gap: 16px; }}
+.video-player {{ width: 100%; max-height: 420px; border-radius: 16px; background: #020617; box-shadow: 0 10px 30px rgba(0,0,0,.35); }}
 .bbox {{ position: absolute; left: 32%; top: 18%; width: 26%; height: 42%; border: 4px solid #f8fafc; border-radius: 20px; }}
 .badge {{ position: absolute; left: 32%; top: 11%; background: #111827; padding: 10px 14px; border-radius: 999px; }}
+.transport {{ display: flex; gap: 12px; margin-top: 16px; }}
+.transport button {{ border: none; border-radius: 999px; padding: 10px 16px; background: #1e293b; color: #e2e8f0; cursor: pointer; }}
+.subtitle {{ margin-top: 16px; padding: 12px 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.88); font-size: 18px; min-height: 52px; }}
+.audio-meter {{ margin-top: 16px; }}
+.audio-track {{ height: 18px; width: 100%; border-radius: 999px; overflow: hidden; background: #0f172a; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #334155; position: relative; }}
+.audio-track span:nth-child(1) {{ background: #16a34a; }}
+.audio-track span:nth-child(2) {{ background: #eab308; }}
+.audio-track span:nth-child(3) {{ background: #dc2626; }}
+.audio-fill {{ position: absolute; inset: 0 auto 0 0; width: {audio_percent}%; background: rgba(255,255,255,.25); }}
 .side {{ background: #111827; padding: 24px; }}
 .panel {{ background: #1f2937; border-radius: 16px; padding: 16px; margin-bottom: 16px; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
@@ -72,9 +159,14 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
   <div class='preview'>
     <h1>Emotion AI System — Analysis Preview</h1>
     <p>Source: {html.escape(stats['source'])}</p>
-    <div class='video'>
-      <div class='bbox'></div>
-      <div class='badge'>Face emotion: {html.escape(str(latest.get('face_emotion', 'N/A')))} ({latest.get('face_confidence', 0.0)})</div>
+    {video_markup}
+    <div class='subtitle'>{subtitle_text}</div>
+    <div class='audio-meter'>
+      <div class='audio-track'>
+        <span></span><span></span><span></span>
+        <div class='audio-fill'></div>
+      </div>
+      <p>Уровень микрофона / аудио: {audio_percent}% — зелёный: тихо, жёлтый: норма, красный: слишком громко</p>
     </div>
   </div>
   <div class='side'>
@@ -82,6 +174,7 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel'>
       <div class='final'>{html.escape(str(latest.get('final_emotion', 'N/A')))}</div>
       <p>Speech text: {html.escape(str(latest.get('speech_text', '')))}</p>
+      <p>Audio level: {audio_percent}%</p>
       <p>Toxicity: {latest.get('text_toxicity_score', 0.0)}</p>
       <p>Frames processed: {stats['frames_processed']}</p>
       <p>Detections: {stats['detections']}</p>
@@ -90,7 +183,7 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel'>
       <h3>Timeline</h3>
       <table>
-        <thead><tr><th>t, ms</th><th>Face</th><th>Speech</th><th>Final</th></tr></thead>
+        <thead><tr><th>t, ms</th><th>Face</th><th>Speech</th><th>Audio</th><th>Final</th></tr></thead>
         <tbody>{rows}</tbody>
       </table>
     </div>
@@ -111,6 +204,8 @@ def _create_runtime() -> dict[str, object]:
         "stt": SpeechToTextService(),
         "text_analyzer": TextToxicityAnalyzer(),
         "voice_analyzer": VoiceEmotionAnalyzer(),
+        "face_history": {},
+        "decision_history": {},
     }
 
 
@@ -121,18 +216,25 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
     stt: SpeechToTextService = runtime["stt"]  # type: ignore[assignment]
     text_analyzer: TextToxicityAnalyzer = runtime["text_analyzer"]  # type: ignore[assignment]
     voice_analyzer: VoiceEmotionAnalyzer = runtime["voice_analyzer"]  # type: ignore[assignment]
+    face_history: dict[int, dict[str, float]] = runtime["face_history"]  # type: ignore[assignment]
+    decision_history: dict[int, dict[str, float]] = runtime["decision_history"]  # type: ignore[assignment]
 
     detections = tracker.assign_ids(detector.detect(frame))
     transcript = stt.transcribe(segment)
     toxicity = text_analyzer.analyze(transcript)
     voice_probs = voice_analyzer.analyze(segment)
+    audio_level = _audio_level_from_segment(segment)
 
     records: list[dict] = []
     for detection in detections:
         crop = preprocess_face(frame, detection)
         face_probs = face_model.predict(crop)
+        face_probs = _smooth_scores(face_probs, face_history.get(int(detection.face_id or 0)))
+        face_history[int(detection.face_id or 0)] = face_probs
         face_emotion = max(face_probs, key=face_probs.get)
         decision = fuse_signals(face_probs, voice_probs, toxicity, weights=FusionWeights())
+        decision = _build_smoothed_decision(decision, decision_history.get(int(detection.face_id or 0)))
+        decision_history[int(detection.face_id or 0)] = decision.combined_scores
         voice_emotion = max(voice_probs, key=voice_probs.get)
         records.append(
             {
@@ -142,6 +244,7 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
                 "face_emotion": face_emotion,
                 "face_confidence": round(face_probs[face_emotion], 2),
                 "speech_text": transcript,
+                "audio_level": audio_level,
                 "text_toxicity_label": toxicity["label"],
                 "text_toxicity_score": toxicity["score"],
                 "voice_emotion": voice_emotion,
@@ -162,9 +265,9 @@ def _render_summary(records: list[dict], source_ref: str | None = None) -> str:
             f"Frames processed: {stats['frames_processed']}\n"
             f"Detections: {stats['detections']}\n"
             f"Unique faces: {stats['unique_faces']}\n\n"
-            f"Face emotion: {latest['face_emotion']} ({latest['face_confidence']})\n"
-            f"Speech sentiment: {latest['voice_emotion']} ({latest['voice_confidence']})\n"
-            f"Final emotion: {latest['final_emotion']}\n"
+            f"Face emotion: {latest.get('face_emotion', 'N/A')} ({latest.get('face_confidence', 0.0)})\n"
+            f"Speech sentiment: {latest.get('voice_emotion', 'N/A')} ({latest.get('voice_confidence', 0.0)})\n"
+            f"Final emotion: {latest.get('final_emotion', 'N/A')}\n"
         )
     return (
         f"Source: {stats['source']}\n"
@@ -182,7 +285,8 @@ def _collect_run_stats(records: list[dict], source_ref: str | None = None) -> di
         for record in records
         if record.get("face_id") is not None
     }
-    source = str(records[-1]["source"]) if records else str(source_ref or "unknown")
+    fallback_source = source_ref or "unknown"
+    source = str(records[-1].get("source", fallback_source)) if records else str(fallback_source)
     return {
         "source": source,
         "frames_processed": len(unique_timestamps),
@@ -258,12 +362,18 @@ def run_pipeline(
 
 def launch_gui(results_dir: str = "results") -> int:
     try:
+        from array import array
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+        try:
+            from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+        except Exception:  # pragma: no cover - optional multimedia backend
+            QAudioFormat = None
+            QAudioSource = None
+            QMediaDevices = None
         from PySide6.QtWidgets import (
             QApplication,
             QFileDialog,
-            QGridLayout,
             QHBoxLayout,
             QLabel,
             QMainWindow,
@@ -279,6 +389,40 @@ def launch_gui(results_dir: str = "results") -> int:
         LOGGER.error("PySide6 is required for GUI mode: %s", exc)
         return 1
 
+    class AudioLevelWidget(QWidget):  # pragma: no cover - exercised manually
+        def __init__(self) -> None:
+            super().__init__()
+            self._level = 0.0
+            self.setMinimumHeight(28)
+
+        def set_level(self, level: float) -> None:
+            bounded = min(max(float(level), 0.0), 1.0)
+            if abs(self._level - bounded) > 0.01:
+                self._level = bounded
+                self.update()
+
+        def paintEvent(self, event) -> None:
+            del event
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = self.rect().adjusted(1, 1, -1, -1)
+            segment_width = rect.width() / 3
+            colors = [QColor("#16a34a"), QColor("#eab308"), QColor("#dc2626")]
+            labels = ["тихо", "норма", "слишком громко"]
+            for index, color in enumerate(colors):
+                segment_rect = rect.adjusted(int(index * segment_width), 0, -int((2 - index) * segment_width), 0)
+                painter.fillRect(segment_rect, color)
+            painter.fillRect(rect.adjusted(int(rect.width() * self._level), 0, 0, 0), QColor(*AUDIO_METER_OVERLAY))
+            painter.setPen(QPen(QColor("#e2e8f0"), 2))
+            marker_x = rect.left() + int(rect.width() * self._level)
+            painter.drawLine(marker_x, rect.top(), marker_x, rect.bottom())
+            painter.setPen(QColor("#020617"))
+            painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+            for index, label in enumerate(labels):
+                text_rect = rect.adjusted(int(index * segment_width), 0, -int((2 - index) * segment_width), 0)
+                painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, label)
+            painter.end()
+
     class EmotionWindow(QMainWindow):  # pragma: no cover - exercised manually
         def __init__(self, output_dir: str) -> None:
             super().__init__()
@@ -291,6 +435,9 @@ def launch_gui(results_dir: str = "results") -> int:
             self._frame_iter = None
             self._runtime = None
             self._records: list[dict] = []
+            self._microphone_level = 0.0
+            self._audio_source = None
+            self._audio_device = None
             self._timer = QTimer(self)
             self._timer.setInterval(40)
             self._timer.timeout.connect(self._process_next_frame)
@@ -321,6 +468,16 @@ def launch_gui(results_dir: str = "results") -> int:
             self.stop_button.clicked.connect(self._stop_analysis)
             controls.addWidget(self.stop_button)
 
+            self.pause_button = QPushButton("Пауза")
+            self.pause_button.clicked.connect(self._toggle_pause)
+            self.pause_button.setEnabled(False)
+            controls.addWidget(self.pause_button)
+
+            self.restart_button = QPushButton("Заново")
+            self.restart_button.clicked.connect(self._restart_analysis)
+            self.restart_button.setEnabled(False)
+            controls.addWidget(self.restart_button)
+
             self.preview = QLabel("Выберите камеру или видео для анализа")
             self.preview.setMinimumSize(720, 420)
             self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -328,6 +485,18 @@ def launch_gui(results_dir: str = "results") -> int:
                 "background:#111827;color:#e2e8f0;border-radius:16px;padding:12px;font-size:18px;"
             )
             left.addWidget(self.preview)
+
+            self.subtitle_label = QLabel("Субтитры появятся здесь после распознавания речи")
+            self.subtitle_label.setWordWrap(True)
+            self.subtitle_label.setMinimumHeight(56)
+            self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.subtitle_label.setStyleSheet(
+                "background:#0f172a;color:#e2e8f0;border-radius:14px;padding:12px;font-size:18px;"
+            )
+            left.addWidget(self.subtitle_label)
+
+            self.audio_meter = AudioLevelWidget()
+            left.addWidget(self.audio_meter)
 
             self.status = QLabel("Готово")
             left.addWidget(self.status)
@@ -344,8 +513,8 @@ def launch_gui(results_dir: str = "results") -> int:
             self.metrics.setMinimumHeight(160)
             right.addWidget(self.metrics)
 
-            self.timeline = QTableWidget(0, 4)
-            self.timeline.setHorizontalHeaderLabels(["t, ms", "Лицо", "Речь", "Итог"])
+            self.timeline = QTableWidget(0, 5)
+            self.timeline.setHorizontalHeaderLabels(["t, ms", "Лицо", "Речь", "Аудио", "Итог"])
             self.timeline.horizontalHeader().setStretchLastSection(True)
             right.addWidget(self.timeline)
 
@@ -382,21 +551,86 @@ def launch_gui(results_dir: str = "results") -> int:
             self._path = path
             self._runtime = _create_runtime()
             self._records = []
+            self._microphone_level = 0.0
             self.timeline.setRowCount(0)
             self.metrics.clear()
             self.final_label.setText("Итоговая эмоция: анализ...")
+            self.subtitle_label.setText("Субтитры появятся здесь после распознавания речи")
+            self.audio_meter.set_level(0.0)
             self.status.setText(f"Анализ: {path or source}")
             self._frame_iter = iter_video_frames(source=source, path=path)
+            self.pause_button.setText("Пауза")
+            self.pause_button.setEnabled(bool(path))
+            self.restart_button.setEnabled(bool(path))
+            if source == "camera":
+                self._start_microphone_monitor()
             self._timer.start()
 
         def _stop_analysis(self, persist: bool = True) -> None:
             if self._timer.isActive():
                 self._timer.stop()
+            self._stop_microphone_monitor()
             if persist and self._records:
                 output_path = Path(self._output_dir)
                 output_path.mkdir(parents=True, exist_ok=True)
                 _write_results(self._records, output_path, self._path or self._source)
                 self.status.setText(f"Результаты сохранены в {output_path}")
+            self._frame_iter = None
+            self.pause_button.setText("Пауза")
+
+        def _toggle_pause(self) -> None:
+            if not self._frame_iter:
+                return
+            if self._timer.isActive():
+                self._timer.stop()
+                self.pause_button.setText("Продолжить")
+                self.status.setText("Анализ поставлен на паузу")
+                return
+            self._timer.start()
+            self.pause_button.setText("Пауза")
+            self.status.setText(f"Анализ продолжен: {self._path or self._source}")
+
+        def _restart_analysis(self) -> None:
+            if self._path:
+                self._start_analysis(source=self._source, path=self._path)
+
+        def _start_microphone_monitor(self) -> None:
+            if QAudioFormat is None or QAudioSource is None or QMediaDevices is None:
+                return
+            audio_device = QMediaDevices.defaultAudioInput()
+            if audio_device.isNull():
+                return
+            audio_format = QAudioFormat()
+            audio_format.setSampleRate(16_000)
+            audio_format.setChannelCount(1)
+            audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+            self._audio_source = QAudioSource(audio_device, audio_format, self)
+            self._audio_device = self._audio_source.start()
+            if self._audio_device is not None:
+                self._audio_device.readyRead.connect(self._consume_microphone_level)
+
+        def _stop_microphone_monitor(self) -> None:
+            if self._audio_source is not None:
+                self._audio_source.stop()
+            self._audio_source = None
+            self._audio_device = None
+
+        def _consume_microphone_level(self) -> None:
+            if self._audio_device is None:
+                return
+            payload = bytes(self._audio_device.readAll())
+            if not payload:
+                return
+            if len(payload) < 2:
+                return
+            samples = array("h")
+            samples.frombytes(payload[: len(payload) - (len(payload) % 2)])
+            if not samples:
+                return
+            self._microphone_level = max(abs(sample) for sample in samples) / 32768.0
+            if self._source == "camera":
+                self.audio_meter.set_level(self._microphone_level)
+                self.status.setText(f"Микрофон: {int(self._microphone_level * 100)}%")
 
         def _process_next_frame(self) -> None:
             try:
@@ -435,6 +669,7 @@ def launch_gui(results_dir: str = "results") -> int:
                 str(record["timestamp_ms"]),
                 str(record["face_emotion"]),
                 str(record["speech_text"]),
+                f"{int(float(record.get('audio_level', 0.0)) * 100)}%",
                 str(record["final_emotion"]),
             ]
             for column, value in enumerate(values):
@@ -450,10 +685,14 @@ def launch_gui(results_dir: str = "results") -> int:
                         f"Face emotion: {record['face_emotion']} ({record['face_confidence']})",
                         f"Speech sentiment: {record['voice_emotion']} ({record['voice_confidence']})",
                         f"Toxicity: {record['text_toxicity_label']} ({record['text_toxicity_score']})",
+                        f"Audio level: {int(float(record.get('audio_level', 0.0)) * 100)}%",
                         f"Текст: {record['speech_text'] or '—'}",
                     ]
                 )
             )
+            self.subtitle_label.setText(record["speech_text"] or "Субтитры появятся здесь после распознавания речи")
+            level = _display_audio_level(record, microphone_level=self._microphone_level, source=self._source)
+            self.audio_meter.set_level(level)
             self.status.setText(f"Последний кадр: {record['timestamp_ms']} ms")
 
         def _update_preview(self, frame, record: dict | None) -> None:
