@@ -39,6 +39,14 @@ class UiAppTests(unittest.TestCase):
                 (Path(tmp_dir) / "summary.txt").read_text(encoding="utf-8"),
             )
 
+    def test_camera_pipeline_uses_fallback_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            records = run_pipeline(source="camera", path=None, results_dir=tmp_dir, max_frames=2)
+            self.assertEqual(len(records), 2)
+            summary = (Path(tmp_dir) / "summary.txt").read_text(encoding="utf-8")
+            self.assertIn("Final emotion", summary)
+            self.assertTrue((Path(tmp_dir) / "ui_preview.html").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,17 +51,32 @@ bash setup.sh
 setup.bat
 ```
 
-### 2. Demo режим с файлом
+### 2. Графический интерфейс
+
+```bash
+python src/ui_app.py --gui --results-dir /tmp/emo-results
+```
+
+В GUI доступны:
+
+- запуск анализа эмоций с камеры в реальном времени;
+- загрузка видеофайла (`.mp4`, `.avi`, `.mov`, `.mkv`) для покадрового анализа;
+- открытие JSON demo-сценария;
+- сохранение результатов в `JSON`, `CSV`, `HTML` и `summary.txt`.
+
+### 3. Demo режим с файлом
 
 ```bash
 python src/ui_app.py --source file --path examples/demo_input.json --results-dir /tmp/emo-results
 ```
 
-### 3. Demo режим с камерой
+### 4. Demo режим с камерой
 
 ```bash
 python src/ui_app.py --source camera --results-dir /tmp/emo-camera-results
 ```
+
+Для ограничения длительности live/demo режима можно добавить `--max-frames 100`.
 
 ## Поддерживаемые артефакты
 
@@ -76,12 +91,12 @@ python src/ui_app.py --source camera --results-dir /tmp/emo-camera-results
 
 Текущая реализация отдаёт **рабочий локальный baseline**, который:
 
-1. читает файл или synthetic camera stream;
+1. читает JSON-файл, видеозапись или поток с камеры;
 2. находит/нормализует лицо;
 3. оценивает face emotion;
 4. обрабатывает speech segment → STT → toxicity + voice emotion;
 5. объединяет сигналы через `fusion_engine`;
-6. экспортирует результаты и demo UI preview.
+6. показывает live GUI preview и экспортирует результаты.
 
 Это baseline-реализация для дальнейшего подключения реальных моделей MediaPipe/Vosk/PyTorch/ONNX. В коде предусмотрены адаптеры и точки расширения, чтобы заменить эвристики на обученные модели без смены интерфейсов.
 
