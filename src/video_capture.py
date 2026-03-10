@@ -6,6 +6,11 @@ from typing import Iterator
 
 from utils.schemas import FramePacket
 
+try:
+    import cv2
+except Exception:  # pragma: no cover - optional runtime dependency
+    cv2 = None
+
 
 def _load_json_payload(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
@@ -27,6 +32,70 @@ def _frames_from_payload(payload: dict) -> list[FramePacket]:
     return frames
 
 
+def _build_visual_metadata(image) -> dict:
+    height, width = image.shape[:2]
+    center_w = max(width // 4, 1)
+    center_h = max(height // 3, 1)
+    bbox_x = max((width - center_w) // 2, 0)
+    bbox_y = max((height - center_h) // 3, 0)
+
+    mean_intensity = float(image.mean()) / 255.0
+    contrast = float(image.std()) / 255.0
+    return {
+        "image": image,
+        "hint_bbox": [bbox_x, bbox_y, center_w, center_h],
+        "smile_score": round(min(max(mean_intensity, 0.0), 1.0), 3),
+        "brow_tension": round(min(max(contrast * 2.0, 0.0), 1.0), 3),
+    }
+
+
+def _iter_cv2_frames(path: str | None = None, max_frames: int | None = None) -> Iterator[FramePacket]:
+    if cv2 is None:
+        return
+
+    capture_target = 0 if path is None else path
+    capture = cv2.VideoCapture(capture_target)
+    if not capture.isOpened():
+        capture.release()
+        return
+
+    fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+    if fps <= 0:
+        fps = 25.0
+
+    try:
+        index = 0
+        while max_frames is None or index < max_frames:
+            ok, image = capture.read()
+            if not ok or image is None:
+                break
+            metadata = _build_visual_metadata(image)
+            yield FramePacket(
+                index=index,
+                timestamp_ms=int((index / fps) * 1000),
+                width=int(image.shape[1]),
+                height=int(image.shape[0]),
+                metadata=metadata,
+            )
+            index += 1
+    finally:
+        capture.release()
+
+
+def _iter_synthetic_frames(max_frames: int | None = None) -> Iterator[FramePacket]:
+    for index in range(max_frames or 3):
+        yield FramePacket(
+            index=index,
+            timestamp_ms=index * 40,
+            metadata={
+                "hint_bbox": [420, 180, 280, 280],
+                "hint_face_emotion": "NEUTRAL" if index else "JOY",
+                "speech_text": "всё спокойно" if index else "ну конечно, ты опять опоздал",
+                "voice_features": {"pitch": 0.35 + index * 0.1, "energy": 0.25 + index * 0.2, "tempo": 0.3},
+            },
+        )
+
+
 def iter_video_frames(source: str, path: str | None = None, max_frames: int | None = None) -> Iterator[FramePacket]:
     """Yield frames from a JSON fixture, OpenCV backend, or a synthetic fallback stream."""
     if source not in {"file", "camera"}:
@@ -39,15 +108,16 @@ def iter_video_frames(source: str, path: str | None = None, max_frames: int | No
             for frame in frames[:max_frames]:
                 yield frame
             return
+        if candidate.exists():
+            yield from _iter_cv2_frames(path=str(candidate), max_frames=max_frames)
+            return
 
-    for index in range(max_frames or 3):
-        yield FramePacket(
-            index=index,
-            timestamp_ms=index * 40,
-            metadata={
-                "hint_bbox": [420, 180, 280, 280],
-                "hint_face_emotion": "NEUTRAL" if index else "JOY",
-                "speech_text": "всё спокойно" if index else "ну конечно, ты опять опоздал",
-                "voice_features": {"pitch": 0.35 + index * 0.1, "energy": 0.25 + index * 0.2, "tempo": 0.3},
-            },
-        )
+    if source == "camera":
+        yielded = False
+        for frame in _iter_cv2_frames(max_frames=max_frames):
+            yielded = True
+            yield frame
+        if yielded:
+            return
+
+    yield from _iter_synthetic_frames(max_frames=max_frames)
