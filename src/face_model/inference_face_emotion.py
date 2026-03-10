@@ -18,21 +18,35 @@ class FaceEmotionInference:
             self.class_priors.update(payload.get("class_priors", {}))
 
     def predict(self, crop_metadata: dict) -> dict[str, float]:
-        scores = {label: 0.01 for label in EMOTION_LABELS}
+        scores = {
+            label: round(max(float(self.class_priors.get(label, 0.0)), 0.01) * 0.12 + 0.01, 4)
+            for label in EMOTION_LABELS
+        }
         hint = crop_metadata.get("hint_face_emotion")
         if hint in scores:
-            scores[hint] = 0.85
+            scores[hint] += 1.1
         else:
             smile = float(crop_metadata.get("smile_score", 0.0))
             brow = float(crop_metadata.get("brow_tension", 0.0))
-            if smile >= 0.6:
-                scores["JOY"] = 0.8
-            elif brow >= 0.75:
-                scores["AGGRESSION"] = 0.72
-            elif brow >= 0.45:
-                scores["ANGER"] = 0.68
+            mouth = float(crop_metadata.get("mouth_open_score", 0.0))
+            eyes = float(crop_metadata.get("eye_open_score", 0.0))
+            symmetry = float(crop_metadata.get("symmetry_score", 0.85))
+            warmth = float(crop_metadata.get("warmth_score", 0.5))
+
+            scores["JOY"] += max(0.0, smile - 0.45) * 1.9 + mouth * 0.2 + max(0.0, warmth - 0.5) * 0.4
+            scores["SARCASM"] += max(0.0, smile - 0.3) * 0.9 + max(0.0, brow - 0.35) * 0.75 + max(0.0, 0.85 - symmetry) * 0.5
+            scores["AGGRESSION"] += max(0.0, brow - 0.65) * 2.2 + max(0.0, mouth - 0.35) * 0.55
+            scores["ANGER"] += max(0.0, brow - 0.45) * 1.45 + max(0.0, mouth - 0.25) * 0.25
+            scores["IRRITATION"] += max(0.0, brow - 0.25) * 0.9 + max(0.0, 0.45 - smile) * 0.5 + max(0.0, 0.35 - eyes) * 0.3
+            scores["RUDE"] += max(0.0, brow - 0.55) * 0.65 + max(0.0, 0.8 - symmetry) * 0.4
+            if smile < 0.4 and brow < 0.4:
+                scores["NEUTRAL"] += 0.7 + symmetry * 0.1
+            elif smile >= 0.55 and brow < 0.45:
+                scores["JOY"] += 0.25
+            elif brow >= 0.75 and smile < 0.3:
+                scores["AGGRESSION"] += 0.3
             else:
-                scores["NEUTRAL"] = 0.7
+                scores["NEUTRAL"] += 0.35
         total = sum(scores.values())
         return {label: round(value / total, 4) for label, value in scores.items()}
 
