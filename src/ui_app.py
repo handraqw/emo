@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import logging
 from pathlib import Path
@@ -16,6 +17,7 @@ from speech_to_text import SpeechToTextService
 from text_toxicity import TextToxicityAnalyzer
 from utils.schemas import SpeechSegment
 from video_capture import iter_video_frames
+from video_capture import VideoSourceError
 from voice_emotion import VoiceEmotionAnalyzer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -31,13 +33,21 @@ def _choose_segment(segments, timestamp_ms: int):
     return segments[-1]
 
 
-def _render_html_preview(records: list[dict], output_path: Path) -> None:
+def _render_html_preview(records: list[dict], output_path: Path, source_ref: str | None) -> None:
+    stats = _collect_run_stats(records, source_ref=source_ref)
     latest = records[-1] if records else {}
     rows = "\n".join(
-        f"<tr><td>{item['timestamp_ms']}</td><td>{item['face_emotion']}</td><td>{item['speech_text']}</td><td>{item['final_emotion']}</td></tr>"
+        (
+            "<tr>"
+            f"<td>{item['timestamp_ms']}</td>"
+            f"<td>{html.escape(str(item['face_emotion']))}</td>"
+            f"<td>{html.escape(str(item['speech_text']))}</td>"
+            f"<td>{html.escape(str(item['final_emotion']))}</td>"
+            "</tr>"
+        )
         for item in records
     )
-    html = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang='ru'>
 <head>
 <meta charset='utf-8'>
@@ -60,18 +70,22 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
 <body>
 <div class='app'>
   <div class='preview'>
-    <h1>Emotion AI System — MVP Preview</h1>
+    <h1>Emotion AI System — Analysis Preview</h1>
+    <p>Source: {html.escape(stats['source'])}</p>
     <div class='video'>
       <div class='bbox'></div>
-      <div class='badge'>Face emotion: {latest.get('face_emotion', 'N/A')} ({latest.get('face_confidence', 0.0)})</div>
+      <div class='badge'>Face emotion: {html.escape(str(latest.get('face_emotion', 'N/A')))} ({latest.get('face_confidence', 0.0)})</div>
     </div>
   </div>
   <div class='side'>
-    <div class='panel mono'>Camera 1\n\nFace emotion: {latest.get('face_emotion', 'N/A')} ({latest.get('face_confidence', 0.0)})\nSpeech sentiment: {latest.get('voice_emotion', 'N/A')} ({latest.get('voice_confidence', 0.0)})\nFinal emotion: {latest.get('final_emotion', 'N/A')}</div>
+    <div class='panel mono'>{html.escape(_render_summary(records, source_ref=source_ref))}</div>
     <div class='panel'>
-      <div class='final'>{latest.get('final_emotion', 'N/A')}</div>
-      <p>Speech text: {latest.get('speech_text', '')}</p>
+      <div class='final'>{html.escape(str(latest.get('final_emotion', 'N/A')))}</div>
+      <p>Speech text: {html.escape(str(latest.get('speech_text', '')))}</p>
       <p>Toxicity: {latest.get('text_toxicity_score', 0.0)}</p>
+      <p>Frames processed: {stats['frames_processed']}</p>
+      <p>Detections: {stats['detections']}</p>
+      <p>Unique faces: {stats['unique_faces']}</p>
     </div>
     <div class='panel'>
       <h3>Timeline</h3>
@@ -84,7 +98,7 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
 </div>
 </body>
 </html>"""
-    output_path.write_text(html, encoding="utf-8")
+    output_path.write_text(html_content, encoding="utf-8")
 
 
 def _create_runtime() -> dict[str, object]:
@@ -139,16 +153,42 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
     return records
 
 
-def _render_summary(records: list[dict]) -> str:
+def _render_summary(records: list[dict], source_ref: str | None = None) -> str:
+    stats = _collect_run_stats(records, source_ref=source_ref)
     if records:
         latest = records[-1]
         return (
-            "Camera 1\n\n"
+            f"Source: {stats['source']}\n"
+            f"Frames processed: {stats['frames_processed']}\n"
+            f"Detections: {stats['detections']}\n"
+            f"Unique faces: {stats['unique_faces']}\n\n"
             f"Face emotion: {latest['face_emotion']} ({latest['face_confidence']})\n"
             f"Speech sentiment: {latest['voice_emotion']} ({latest['voice_confidence']})\n"
             f"Final emotion: {latest['final_emotion']}\n"
         )
-    return "Camera 1\n\nNo frames or detections were available for analysis.\n"
+    return (
+        f"Source: {stats['source']}\n"
+        "Frames processed: 0\n"
+        "Detections: 0\n"
+        "Unique faces: 0\n\n"
+        "No frames or detections were available for analysis.\n"
+    )
+
+
+def _collect_run_stats(records: list[dict], source_ref: str | None = None) -> dict[str, object]:
+    unique_timestamps = {int(record["timestamp_ms"]) for record in records}
+    unique_faces = {
+        int(record["face_id"])
+        for record in records
+        if record.get("face_id") is not None
+    }
+    source = str(records[-1]["source"]) if records else str(source_ref or "unknown")
+    return {
+        "source": source,
+        "frames_processed": len(unique_timestamps),
+        "detections": len(records),
+        "unique_faces": len(unique_faces),
+    }
 
 
 def _write_results(records: list[dict], results_path: Path, video_ref: str | None) -> None:
@@ -167,8 +207,8 @@ def _write_results(records: list[dict], results_path: Path, video_ref: str | Non
     else:
         csv_path.write_text("", encoding="utf-8")
 
-    _render_html_preview(records, results_path / "ui_preview.html")
-    summary = _render_summary(records)
+    _render_html_preview(records, results_path / "ui_preview.html", source_ref=video_ref)
+    summary = _render_summary(records, source_ref=video_ref)
     (results_path / "summary.txt").write_text(summary, encoding="utf-8")
     LOGGER.info("Results written to %s", results_path)
     print(summary)
@@ -188,6 +228,8 @@ def analyze_source(
     for frame in frames:
         segment = _choose_segment(speech_segments, frame.timestamp_ms)
         frame_records = _analyze_frame(frame, segment, runtime)
+        for record in frame_records:
+            record["source"] = path or source
         records.extend(frame_records)
         if on_record:
             for record in frame_records:
@@ -359,6 +401,12 @@ def launch_gui(results_dir: str = "results") -> int:
         def _process_next_frame(self) -> None:
             try:
                 frame = next(self._frame_iter)
+            except VideoSourceError as exc:
+                self._stop_analysis(persist=False)
+                self.status.setText(str(exc))
+                QMessageBox.warning(self, "Источник недоступен", str(exc))
+                self.preview.setText(str(exc))
+                return
             except StopIteration:
                 self._stop_analysis()
                 return
