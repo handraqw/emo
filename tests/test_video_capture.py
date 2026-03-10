@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from utils.schemas import FramePacket
-from video_capture import iter_video_frames
+from video_capture import VideoSourceError, iter_video_frames
 
 
 class VideoCaptureTests(unittest.TestCase):
@@ -22,6 +22,14 @@ class VideoCaptureTests(unittest.TestCase):
                 frames = list(iter_video_frames(source="file", path=str(video_path), max_frames=1))
             self.assertEqual(frames, [frame])
             mocked.assert_called_once_with(path=str(video_path), max_frames=1)
+
+    def test_unreadable_video_file_raises_error_instead_of_demo_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "broken.mp4"
+            video_path.write_bytes(b"not-a-real-video")
+            with patch("video_capture._iter_cv2_frames", return_value=iter(())):
+                with self.assertRaises(VideoSourceError):
+                    list(iter_video_frames(source="file", path=str(video_path), max_frames=1))
 
 
 if __name__ == "__main__":

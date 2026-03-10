@@ -12,6 +12,10 @@ except Exception:  # pragma: no cover - optional runtime dependency
     cv2 = None
 
 
+class VideoSourceError(RuntimeError):
+    """Raised when a requested camera or video source cannot be read."""
+
+
 def _load_json_payload(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -97,27 +101,33 @@ def _iter_synthetic_frames(max_frames: int | None = None) -> Iterator[FramePacke
 
 
 def iter_video_frames(source: str, path: str | None = None, max_frames: int | None = None) -> Iterator[FramePacket]:
-    """Yield frames from a JSON fixture, OpenCV backend, or a synthetic fallback stream."""
+    """Yield frames from JSON fixtures or real OpenCV-backed camera/video streams."""
     if source not in {"file", "camera"}:
         raise ValueError(f"Unsupported source: {source}")
 
+    if source == "file" and not path:
+        raise ValueError("A path is required when source='file'.")
+
     if path:
         candidate = Path(path)
+        if not candidate.exists():
+            raise FileNotFoundError(f"Input path does not exist: {candidate}")
         if candidate.suffix.lower() == ".json" and candidate.exists():
             frames = _frames_from_payload(_load_json_payload(candidate))
             for frame in frames[:max_frames]:
                 yield frame
             return
-        if candidate.exists():
-            yield from _iter_cv2_frames(path=str(candidate), max_frames=max_frames)
-            return
+        frame_iter = _iter_cv2_frames(path=str(candidate), max_frames=max_frames)
+        first_frame = next(frame_iter, None)
+        if first_frame is None:
+            raise VideoSourceError(f"Unable to read video frames from: {candidate}")
+        yield first_frame
+        yield from frame_iter
+        return
 
-    if source == "camera":
-        yielded = False
-        for frame in _iter_cv2_frames(max_frames=max_frames):
-            yielded = True
-            yield frame
-        if yielded:
-            return
-
-    yield from _iter_synthetic_frames(max_frames=max_frames)
+    frame_iter = _iter_cv2_frames(max_frames=max_frames)
+    first_frame = next(frame_iter, None)
+    if first_frame is None:
+        raise VideoSourceError("Unable to open the camera or read frames from it.")
+    yield first_frame
+    yield from frame_iter

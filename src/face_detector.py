@@ -30,6 +30,10 @@ class FaceDetector:
                     FaceDetection(bbox=(int(x), int(y), int(w), int(h)), confidence=0.95, landmarks={})
                     for x, y, w, h in boxes[:3]
                 ]
+            return []
+
+        if image is not None and "hint_bbox" not in frame.metadata:
+            return []
 
         bbox = frame.metadata.get("hint_bbox", [420, 180, 280, 280])
         landmarks = frame.metadata.get(
