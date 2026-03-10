@@ -16,12 +16,15 @@ from speech_to_text import SpeechToTextService
 from text_toxicity import TextToxicityAnalyzer
 from video_capture import iter_video_frames
 from voice_emotion import VoiceEmotionAnalyzer
+from utils.schemas import SpeechSegment
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 LOGGER = logging.getLogger(__name__)
 
 
 def _choose_segment(segments, timestamp_ms: int):
+    if not segments:
+        return SpeechSegment(start_ms=timestamp_ms, end_ms=timestamp_ms, text="", metadata={})
     for segment in segments:
         if segment.covers(timestamp_ms):
             return segment
@@ -135,20 +138,27 @@ def run_pipeline(source: str, path: str | None, results_dir: str) -> list[dict]:
         encoding="utf-8",
     )
 
-    with (results_path / "annotations.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(records[0].keys()))
-        writer.writeheader()
-        writer.writerows(records)
+    csv_path = results_path / "annotations.csv"
+    if records:
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(records[0].keys()))
+            writer.writeheader()
+            writer.writerows(records)
+    else:
+        csv_path.write_text("", encoding="utf-8")
 
     _render_html_preview(records, results_path / "ui_preview.html")
 
-    latest = records[-1]
-    summary = (
-        "Camera 1\n\n"
-        f"Face emotion: {latest['face_emotion']} ({latest['face_confidence']})\n"
-        f"Speech sentiment: {latest['voice_emotion']} ({latest['voice_confidence']})\n"
-        f"Final emotion: {latest['final_emotion']}\n"
-    )
+    if records:
+        latest = records[-1]
+        summary = (
+            "Camera 1\n\n"
+            f"Face emotion: {latest['face_emotion']} ({latest['face_confidence']})\n"
+            f"Speech sentiment: {latest['voice_emotion']} ({latest['voice_confidence']})\n"
+            f"Final emotion: {latest['final_emotion']}\n"
+        )
+    else:
+        summary = "Camera 1\n\nNo frames or detections were available for analysis.\n"
     (results_path / "summary.txt").write_text(summary, encoding="utf-8")
     LOGGER.info("Results written to %s", results_path)
     print(summary)

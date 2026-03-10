@@ -26,6 +26,19 @@ class UiAppTests(unittest.TestCase):
             self.assertTrue((Path(tmp_dir) / "ui_preview.html").exists())
             self.assertTrue((Path(tmp_dir) / "summary.txt").exists())
 
+    def test_pipeline_handles_empty_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fixture = Path(tmp_dir) / "empty.json"
+            fixture.write_text(json.dumps({"video": "empty.mp4", "frames": [], "speech_segments": []}), encoding="utf-8")
+            records = run_pipeline(source="file", path=str(fixture), results_dir=tmp_dir)
+            self.assertEqual(records, [])
+            payload = json.loads((Path(tmp_dir) / "annotations.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["frames"], [])
+            self.assertIn(
+                "No frames or detections",
+                (Path(tmp_dir) / "summary.txt").read_text(encoding="utf-8"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
