@@ -112,7 +112,7 @@ def iter_video_frames(source: str, path: str | None = None, max_frames: int | No
         candidate = Path(path)
         if not candidate.exists():
             raise FileNotFoundError(f"Input path does not exist: {candidate}")
-        if candidate.suffix.lower() == ".json" and candidate.exists():
+        if candidate.suffix.lower() == ".json":
             frames = _frames_from_payload(_load_json_payload(candidate))
             for frame in frames[:max_frames]:
                 yield frame
