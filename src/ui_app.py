@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from array import array
 import csv
 import html
 import json
@@ -24,6 +23,12 @@ from voice_emotion import VoiceEmotionAnalyzer
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 LOGGER = logging.getLogger(__name__)
 
+# Slightly favor the newest frame while keeping enough history to reduce emotion flicker.
+FACE_SMOOTHING_WEIGHT = 0.68
+DECISION_SMOOTHING_WEIGHT = 0.7
+# RGBA overlay color used to dim the inactive part of the three-zone audio meter.
+AUDIO_METER_OVERLAY = (15, 23, 42, 170)
+
 
 def _choose_segment(segments, timestamp_ms: int):
     if not segments:
@@ -42,7 +47,7 @@ def _audio_level_from_segment(segment: SpeechSegment) -> float:
 def _smooth_scores(
     current_scores: dict[str, float],
     previous_scores: dict[str, float] | None,
-    current_weight: float = 0.68,
+    current_weight: float = FACE_SMOOTHING_WEIGHT,
 ) -> dict[str, float]:
     if not previous_scores:
         total = sum(current_scores.values()) or 1.0
@@ -64,8 +69,17 @@ def _build_smoothed_decision(
 ) -> FusionDecision:
     if decision.final_emotion == "CONFLICT":
         return decision
-    combined_scores = _smooth_scores(decision.combined_scores, previous_scores, current_weight=0.7)
-    return FusionDecision(max(combined_scores, key=combined_scores.get), combined_scores, decision.triggered_rules)
+    combined_scores = _smooth_scores(
+        decision.combined_scores, previous_scores, current_weight=DECISION_SMOOTHING_WEIGHT
+    )
+    final_emotion = max(combined_scores, key=combined_scores.get)
+    return FusionDecision(final_emotion, combined_scores, decision.triggered_rules)
+
+
+def _display_audio_level(record: dict, microphone_level: float = 0.0, source: str = "file") -> float:
+    record_level = float(record.get("audio_level", 0.0))
+    live_level = microphone_level if source == "camera" else 0.0
+    return max(record_level, live_level)
 
 
 def _render_html_preview(records: list[dict], output_path: Path, source_ref: str | None) -> None:
@@ -271,7 +285,8 @@ def _collect_run_stats(records: list[dict], source_ref: str | None = None) -> di
         for record in records
         if record.get("face_id") is not None
     }
-    source = str(records[-1].get("source", source_ref or "unknown")) if records else str(source_ref or "unknown")
+    fallback_source = source_ref or "unknown"
+    source = str(records[-1].get("source", fallback_source)) if records else str(fallback_source)
     return {
         "source": source,
         "frames_processed": len(unique_timestamps),
@@ -347,6 +362,7 @@ def run_pipeline(
 
 def launch_gui(results_dir: str = "results") -> int:
     try:
+        from array import array
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
         try:
@@ -396,7 +412,7 @@ def launch_gui(results_dir: str = "results") -> int:
             for index, color in enumerate(colors):
                 segment_rect = rect.adjusted(int(index * segment_width), 0, -int((2 - index) * segment_width), 0)
                 painter.fillRect(segment_rect, color)
-            painter.fillRect(rect.adjusted(int(rect.width() * self._level), 0, 0, 0), QColor(15, 23, 42, 170))
+            painter.fillRect(rect.adjusted(int(rect.width() * self._level), 0, 0, 0), QColor(*AUDIO_METER_OVERLAY))
             painter.setPen(QPen(QColor("#e2e8f0"), 2))
             marker_x = rect.left() + int(rect.width() * self._level)
             painter.drawLine(marker_x, rect.top(), marker_x, rect.bottom())
@@ -419,7 +435,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self._frame_iter = None
             self._runtime = None
             self._records: list[dict] = []
-            self._last_audio_level = 0.0
+            self._microphone_level = 0.0
             self._audio_source = None
             self._audio_device = None
             self._timer = QTimer(self)
@@ -535,7 +551,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self._path = path
             self._runtime = _create_runtime()
             self._records = []
-            self._last_audio_level = 0.0
+            self._microphone_level = 0.0
             self.timeline.setRowCount(0)
             self.metrics.clear()
             self.final_label.setText("Итоговая эмоция: анализ...")
@@ -611,10 +627,10 @@ def launch_gui(results_dir: str = "results") -> int:
             samples.frombytes(payload[: len(payload) - (len(payload) % 2)])
             if not samples:
                 return
-            self._last_audio_level = max(abs(sample) for sample in samples) / 32768.0
+            self._microphone_level = max(abs(sample) for sample in samples) / 32768.0
             if self._source == "camera":
-                self.audio_meter.set_level(self._last_audio_level)
-                self.status.setText(f"Микрофон: {int(self._last_audio_level * 100)}%")
+                self.audio_meter.set_level(self._microphone_level)
+                self.status.setText(f"Микрофон: {int(self._microphone_level * 100)}%")
 
         def _process_next_frame(self) -> None:
             try:
@@ -675,7 +691,7 @@ def launch_gui(results_dir: str = "results") -> int:
                 )
             )
             self.subtitle_label.setText(record["speech_text"] or "Субтитры появятся здесь после распознавания речи")
-            level = max(float(record.get("audio_level", 0.0)), self._last_audio_level if self._source == "camera" else 0.0)
+            level = _display_audio_level(record, microphone_level=self._microphone_level, source=self._source)
             self.audio_meter.set_level(level)
             self.status.setText(f"Последний кадр: {record['timestamp_ms']} ms")
 

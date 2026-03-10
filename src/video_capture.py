@@ -16,6 +16,16 @@ try:
 except Exception:  # pragma: no cover - numpy comes with opencv at runtime
     np = None
 
+# Hand-tuned weights for deriving stable facial cues from a coarse face crop.
+# The lower-half lift emphasizes smiles, while contrast and warmth add light support
+# so the detector remains usable on low-detail webcam frames.
+SMILE_BASELINE = 0.45
+SMILE_LOWER_LIFT_WEIGHT = 2.4
+SMILE_CONTRAST_WEIGHT = 0.45
+SMILE_WARMTH_WEIGHT = 0.2
+BROW_CONTRAST_WEIGHT = 2.1
+BROW_LOWER_LIFT_WEIGHT = 0.4
+
 
 class VideoSourceError(RuntimeError):
     """Raised when a requested camera or video source cannot be read."""
@@ -61,7 +71,7 @@ def _build_visual_metadata(image) -> dict:
     eye_open = float(upper_center.std()) / 64.0 if upper_center.size else 0.0
 
     left = gray[:, : max(width // 2, 1)]
-    right = gray[:, width - left.shape[1] :]
+    right = gray[:, max(width - left.shape[1], 0) :]
     symmetry = 0.5
     if np is not None and left.size and right.size:
         mirrored_right = np.fliplr(right[:, : left.shape[1]])
@@ -74,8 +84,23 @@ def _build_visual_metadata(image) -> dict:
     return {
         "image": image,
         "hint_bbox": [bbox_x, bbox_y, center_w, center_h],
-        "smile_score": round(min(max(0.45 + lower_lift * 2.4 + contrast * 0.45 + (warmth - 0.5) * 0.2, 0.0), 1.0), 3),
-        "brow_tension": round(min(max(contrast * 2.1 + abs(lower_lift) * 0.4, 0.0), 1.0), 3),
+        "smile_score": round(
+            min(
+                max(
+                    SMILE_BASELINE
+                    + lower_lift * SMILE_LOWER_LIFT_WEIGHT
+                    + contrast * SMILE_CONTRAST_WEIGHT
+                    + (warmth - 0.5) * SMILE_WARMTH_WEIGHT,
+                    0.0,
+                ),
+                1.0,
+            ),
+            3,
+        ),
+        "brow_tension": round(
+            min(max(contrast * BROW_CONTRAST_WEIGHT + abs(lower_lift) * BROW_LOWER_LIFT_WEIGHT, 0.0), 1.0),
+            3,
+        ),
         "mouth_open_score": round(min(max(mouth_open, 0.0), 1.0), 3),
         "eye_open_score": round(min(max(eye_open, 0.0), 1.0), 3),
         "symmetry_score": round(min(max(symmetry, 0.0), 1.0), 3),

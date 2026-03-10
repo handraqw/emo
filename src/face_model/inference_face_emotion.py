@@ -6,6 +6,11 @@ from pathlib import Path
 
 from utils.schemas import EMOTION_LABELS
 
+# Blend a small amount of prior knowledge into the fallback rules so unsupported
+# classes still retain non-zero probability before the heuristics are applied.
+PRIOR_SCALE = 0.12
+PRIOR_FLOOR = 0.01
+
 
 class FaceEmotionInference:
     """Rule-based fallback classifier compatible with future model replacement."""
@@ -19,7 +24,7 @@ class FaceEmotionInference:
 
     def predict(self, crop_metadata: dict) -> dict[str, float]:
         scores = {
-            label: round(max(float(self.class_priors.get(label, 0.0)), 0.01) * 0.12 + 0.01, 4)
+            label: round(max(float(self.class_priors.get(label, 0.0)), PRIOR_FLOOR) * PRIOR_SCALE + PRIOR_FLOOR, 4)
             for label in EMOTION_LABELS
         }
         hint = crop_metadata.get("hint_face_emotion")
