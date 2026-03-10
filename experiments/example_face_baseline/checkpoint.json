@@ -1,0 +1,13 @@
+{
+  "model_type": "baseline_rules",
+  "classes": ["JOY", "ANGER", "AGGRESSION", "IRRITATION", "NEUTRAL", "SARCASM", "RUDE"],
+  "class_priors": {
+    "JOY": 0.2,
+    "ANGER": 0.1,
+    "AGGRESSION": 0.15,
+    "IRRITATION": 0.15,
+    "NEUTRAL": 0.2,
+    "SARCASM": 0.1,
+    "RUDE": 0.1
+  }
+}
