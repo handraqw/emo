@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 import csv
 import html
-import json
 import logging
+from array import array
 from pathlib import Path
 
-from audio_pipeline import extract_speech_segments
+from audio_pipeline import build_live_speech_segment, extract_speech_segments
 from face_detector import FaceDetector
 from face_model.inference_face_emotion import FaceEmotionInference
 from face_preprocess import preprocess_face
@@ -109,9 +109,25 @@ def _render_html_preview(records: list[dict], output_path: Path, source_ref: str
         f"""
       <div class='video-shell'>
         <video id='source-video' class='video-player' controls preload='metadata' src='{source_path.as_uri()}'></video>
-        <div class='transport'>
-          <button type='button' onclick=\"const video=document.getElementById('source-video'); video.paused ? video.play() : video.pause();\">Пауза / продолжить</button>
-          <button type='button' onclick=\"const video=document.getElementById('source-video'); video.currentTime = 0; video.play();\">С начала</button>
+        <div class='transport' aria-label='Панель управления видео'>
+          <button type='button' id='play-toggle'>▶︎ / ❚❚</button>
+          <button type='button' id='restart-video'>С начала</button>
+          <button type='button' id='seek-back'>−5 сек</button>
+          <button type='button' id='seek-forward'>+5 сек</button>
+          <label class='transport-meta'>Скорость
+            <select id='playback-rate'>
+              <option value='0.5'>0.5x</option>
+              <option value='1' selected>1x</option>
+              <option value='1.5'>1.5x</option>
+              <option value='2'>2x</option>
+            </select>
+          </label>
+          <button type='button' id='mute-toggle'>Звук</button>
+          <button type='button' id='fullscreen-toggle'>Во весь экран</button>
+        </div>
+        <div class='transport transport-secondary'>
+          <span class='timecode' id='current-time'>00:00 / 00:00</span>
+          <input id='seek-slider' class='seek-slider' type='range' min='0' max='1000' value='0' />
         </div>
       </div>
         """
@@ -137,8 +153,12 @@ body {{ font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #
 .video-player {{ width: 100%; max-height: 420px; border-radius: 16px; background: #020617; box-shadow: 0 10px 30px rgba(0,0,0,.35); }}
 .bbox {{ position: absolute; left: 32%; top: 18%; width: 26%; height: 42%; border: 4px solid #f8fafc; border-radius: 20px; }}
 .badge {{ position: absolute; left: 32%; top: 11%; background: #111827; padding: 10px 14px; border-radius: 999px; }}
-.transport {{ display: flex; gap: 12px; margin-top: 16px; }}
-.transport button {{ border: none; border-radius: 999px; padding: 10px 16px; background: #1e293b; color: #e2e8f0; cursor: pointer; }}
+.transport {{ display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; align-items: center; }}
+.transport-secondary {{ gap: 16px; }}
+.transport button, .transport select {{ border: none; border-radius: 999px; padding: 10px 16px; background: #1e293b; color: #e2e8f0; cursor: pointer; }}
+.transport-meta {{ display: inline-flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 14px; }}
+.seek-slider {{ flex: 1; accent-color: #fbbf24; min-width: 220px; }}
+.timecode {{ min-width: 118px; color: #cbd5e1; font-variant-numeric: tabular-nums; }}
 .subtitle {{ margin-top: 16px; padding: 12px 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.88); font-size: 18px; min-height: 52px; }}
 .audio-meter {{ margin-top: 16px; }}
 .audio-track {{ height: 18px; width: 100%; border-radius: 999px; overflow: hidden; background: #0f172a; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #334155; position: relative; }}
@@ -189,6 +209,75 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     </div>
   </div>
 </div>
+<script>
+const video = document.getElementById('source-video');
+if (video) {{
+  const playToggle = document.getElementById('play-toggle');
+  const restartButton = document.getElementById('restart-video');
+  const seekBack = document.getElementById('seek-back');
+  const seekForward = document.getElementById('seek-forward');
+  const playbackRate = document.getElementById('playback-rate');
+  const muteToggle = document.getElementById('mute-toggle');
+  const fullscreenToggle = document.getElementById('fullscreen-toggle');
+  const seekSlider = document.getElementById('seek-slider');
+  const currentTime = document.getElementById('current-time');
+  const formatTime = (seconds) => {{
+    if (!Number.isFinite(seconds)) return '00:00';
+    const minutes = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+    return `${{minutes}}:${{secs}}`;
+  }};
+  const syncTimeline = () => {{
+    const duration = video.duration || 0;
+    const progress = duration > 0 ? (video.currentTime / duration) * 1000 : 0;
+    seekSlider.value = progress.toFixed(0);
+    currentTime.textContent = `${{formatTime(video.currentTime)}} / ${{formatTime(duration)}}`;
+  }};
+  playToggle.addEventListener('click', () => {{
+    if (video.paused) {{
+      void video.play();
+    }} else {{
+      video.pause();
+    }}
+  }});
+  restartButton.addEventListener('click', () => {{
+    video.currentTime = 0;
+    void video.play();
+  }});
+  seekBack.addEventListener('click', () => {{
+    video.currentTime = Math.max(video.currentTime - 5, 0);
+    syncTimeline();
+  }});
+  seekForward.addEventListener('click', () => {{
+    video.currentTime = Math.min(video.currentTime + 5, video.duration || video.currentTime + 5);
+    syncTimeline();
+  }});
+  playbackRate.addEventListener('change', () => {{
+    video.playbackRate = Number(playbackRate.value);
+  }});
+  muteToggle.addEventListener('click', () => {{
+    video.muted = !video.muted;
+    muteToggle.textContent = video.muted ? 'Без звука' : 'Звук';
+  }});
+  fullscreenToggle.addEventListener('click', async () => {{
+    if (!document.fullscreenElement) {{
+      await video.requestFullscreen();
+    }} else {{
+      await document.exitFullscreen();
+    }}
+  }});
+  seekSlider.addEventListener('input', () => {{
+    if (!video.duration) return;
+    video.currentTime = (Number(seekSlider.value) / 1000) * video.duration;
+    syncTimeline();
+  }});
+  video.addEventListener('loadedmetadata', syncTimeline);
+  video.addEventListener('timeupdate', syncTimeline);
+  video.addEventListener('play', () => {{ playToggle.textContent = '❚❚ Пауза'; }});
+  video.addEventListener('pause', () => {{ playToggle.textContent = '▶︎ Воспроизвести'; }});
+  syncTimeline();
+}}
+</script>
 </body>
 </html>"""
     output_path.write_text(html_content, encoding="utf-8")
@@ -224,6 +313,28 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
     toxicity = text_analyzer.analyze(transcript)
     voice_probs = voice_analyzer.analyze(segment)
     audio_level = _audio_level_from_segment(segment)
+
+    if not detections:
+        neutral_face_probs = {"NEUTRAL": 1.0}
+        decision = fuse_signals(neutral_face_probs, voice_probs, toxicity, weights=FusionWeights())
+        voice_emotion = max(voice_probs, key=voice_probs.get)
+        return [
+            {
+                "timestamp_ms": frame.timestamp_ms,
+                "bbox": [0, 0, 0, 0],
+                "face_id": None,
+                "face_emotion": "NO_FACE",
+                "face_confidence": 0.0,
+                "speech_text": transcript,
+                "audio_level": audio_level,
+                "text_toxicity_label": toxicity["label"],
+                "text_toxicity_score": toxicity["score"],
+                "voice_emotion": voice_emotion,
+                "voice_confidence": round(voice_probs[voice_emotion], 2),
+                "final_emotion": decision.final_emotion,
+                "triggered_rules": decision.triggered_rules,
+            }
+        ]
 
     records: list[dict] = []
     for detection in detections:
@@ -296,12 +407,6 @@ def _collect_run_stats(records: list[dict], source_ref: str | None = None) -> di
 
 
 def _write_results(records: list[dict], results_path: Path, video_ref: str | None) -> None:
-    annotations_payload = {"video": video_ref, "frames": records}
-    (results_path / "annotations.json").write_text(
-        json.dumps(annotations_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
     csv_path = results_path / "annotations.csv"
     if records:
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -362,7 +467,6 @@ def run_pipeline(
 
 def launch_gui(results_dir: str = "results") -> int:
     try:
-        from array import array
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
         try:
@@ -438,6 +542,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self._microphone_level = 0.0
             self._audio_source = None
             self._audio_device = None
+            self._microphone_buffer = array("h")
             self._timer = QTimer(self)
             self._timer.setInterval(40)
             self._timer.timeout.connect(self._process_next_frame)
@@ -459,10 +564,6 @@ def launch_gui(results_dir: str = "results") -> int:
             self.video_button = QPushButton("Загрузить видео")
             self.video_button.clicked.connect(self._open_video)
             controls.addWidget(self.video_button)
-
-            self.json_button = QPushButton("Открыть JSON")
-            self.json_button.clicked.connect(self._open_json)
-            controls.addWidget(self.json_button)
 
             self.stop_button = QPushButton("Стоп")
             self.stop_button.clicked.connect(self._stop_analysis)
@@ -527,17 +628,7 @@ def launch_gui(results_dir: str = "results") -> int:
                 self,
                 "Выберите видео",
                 "",
-                "Media Files (*.mp4 *.avi *.mov *.mkv *.json);;All Files (*)",
-            )
-            if path:
-                self._start_analysis(source="file", path=path)
-
-        def _open_json(self) -> None:
-            path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Выберите JSON сценарий",
-                "",
-                "JSON Files (*.json);;All Files (*)",
+                "Video Files (*.mp4 *.avi *.mov *.mkv *.webm);;All Files (*)",
             )
             if path:
                 self._start_analysis(source="file", path=path)
@@ -552,6 +643,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self._runtime = _create_runtime()
             self._records = []
             self._microphone_level = 0.0
+            self._microphone_buffer = array("h")
             self.timeline.setRowCount(0)
             self.metrics.clear()
             self.final_label.setText("Итоговая эмоция: анализ...")
@@ -628,9 +720,21 @@ def launch_gui(results_dir: str = "results") -> int:
             if not samples:
                 return
             self._microphone_level = max(abs(sample) for sample in samples) / 32768.0
+            self._microphone_buffer.extend(samples)
+            max_samples = int(16_000 * 3)
+            if len(self._microphone_buffer) > max_samples:
+                del self._microphone_buffer[: len(self._microphone_buffer) - max_samples]
             if self._source == "camera":
                 self.audio_meter.set_level(self._microphone_level)
                 self.status.setText(f"Микрофон: {int(self._microphone_level * 100)}%")
+
+        def _apply_live_audio_context(self, frame) -> None:
+            if self._source != "camera" or not self._microphone_buffer:
+                return
+            frame.metadata["speech_segment"] = build_live_speech_segment(
+                self._microphone_buffer,
+                timestamp_ms=frame.timestamp_ms,
+            )
 
         def _process_next_frame(self) -> None:
             try:
@@ -644,6 +748,8 @@ def launch_gui(results_dir: str = "results") -> int:
             except StopIteration:
                 self._stop_analysis()
                 return
+
+            self._apply_live_audio_context(frame)
 
             frame_records = analyze_stream_frame(
                 frame,
@@ -712,13 +818,17 @@ def launch_gui(results_dir: str = "results") -> int:
                 painter.end()
 
             if record:
-                painter = QPainter(pixmap)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                painter.setPen(QPen(QColor("#fbbf24"), 4))
                 x, y, w, h = record["bbox"]
-                scale_x = pixmap.width() / max(frame.width, 1)
-                scale_y = pixmap.height() / max(frame.height, 1)
-                painter.drawRect(int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y))
+                if w > 0 and h > 0:
+                    painter = QPainter(pixmap)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setPen(QPen(QColor("#fbbf24"), 4))
+                    scale_x = pixmap.width() / max(frame.width, 1)
+                    scale_y = pixmap.height() / max(frame.height, 1)
+                    painter.drawRect(int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y))
+                else:
+                    painter = QPainter(pixmap)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.fillRect(20, 20, min(420, pixmap.width() - 40), 52, QColor(15, 23, 42, 220))
                 painter.setPen(QColor("#e2e8f0"))
                 painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))

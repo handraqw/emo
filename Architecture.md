@@ -2,17 +2,20 @@
 
 ## Цель
 
-Построить локальный мультимодальный pipeline распознавания эмоций для одного медиапотока с latency budget до 200 ms на MVP-пути.
+Построить локальный мультимодальный pipeline анализа эмоций для одного видеопотока с опорой на:
+
+- видео с камеры;
+- загруженный видеофайл.
 
 ## Архитектура компонентов
 
 ```text
 ┌─────────────────┐
-│ VideoSource     │  file / camera / RTSP / synthetic JSON
+│ VideoSource     │  camera / uploaded video
 └──────┬──────────┘
        │ frames
        v
-┌─────────────────┐   optional: MediaPipe / OpenCV
+┌─────────────────┐   optional: OpenCV haar cascade / other detectors
 │ FaceDetector    │── bbox + landmarks
 └──────┬──────────┘
        │ detections
@@ -23,29 +26,29 @@
        │ tracked face
        v
 ┌─────────────────┐
-│ FacePreprocess  │── aligned crop metadata (224x224 target)
+│ FacePreprocess  │── aligned crop metadata
 └──────┬──────────┘
        │ crop features
        v
-┌─────────────────┐   optional: ResNet18 / ONNX Runtime CUDA
+┌─────────────────┐
 │ FaceEmotion     │── emotion probabilities
 └─────────────────┘
 
 ┌─────────────────┐
-│ AudioPipeline   │  file audio / microphone / synthetic segments
+│ AudioPipeline   │  video audio / live microphone buffer
 └──────┬──────────┘
-       │ segments
+       │ segments + prosody features
        ├───────────────┐
        v               v
 ┌──────────────┐   ┌───────────────┐
 │ SpeechToText │   │ VoiceEmotion  │
-│ Vosk/Silero  │   │ prosody/SER   │
+│ Vosk         │   │ prosody rules │
 └──────┬───────┘   └──────┬────────┘
        │ text             │ emotion probabilities
        v                  │
 ┌──────────────┐          │
 │ TextToxicity │──────────┘
-│ ru toxicity  │
+│ ru heuristics│
 └──────┬───────┘
        │ text label + score
        v
@@ -55,32 +58,32 @@
        │
        v
 ┌─────────────────┐
-│ UI + Logger     │── console, HTML preview, JSON/CSV
+│ UI + Logger     │── GUI, HTML preview, CSV, summary
 └─────────────────┘
 ```
 
 ## Интерфейсы модулей
 
 - `video_capture.iter_video_frames()` → `FramePacket`
-- `face_detector.FaceDetector.detect()` → `list[FaceDetection]`
-- `face_tracker.FaceTracker.assign_ids()` → `list[FaceDetection]`
-- `face_preprocess.preprocess_face()` → normalized crop metadata
-- `FaceEmotionInference.predict()` → `dict[str, float]`
-- `extract_speech_segments()` → `list[SpeechSegment]`
+- `audio_pipeline.extract_speech_segments()` → `list[SpeechSegment]`
+- `audio_pipeline.build_live_speech_segment()` → live `SpeechSegment`
 - `SpeechToTextService.transcribe()` → transcript text
+- `FaceDetector.detect()` → `list[FaceDetection]`
+- `FaceTracker.assign_ids()` → `list[FaceDetection]`
+- `FaceEmotionInference.predict()` → `dict[str, float]`
 - `TextToxicityAnalyzer.analyze()` → toxicity score + label
 - `VoiceEmotionAnalyzer.analyze()` → voice emotion probabilities
-- `fuse_signals()` → final decision + rule trace
+- `fuse_signals()` → final decision + triggered rules
 
 ## Resource targets
 
 | Component | Target backend | MVP fallback |
 |---|---|---|
-| Face detection | MediaPipe / OpenCV | metadata-driven synthetic detector |
-| Face emotion | PyTorch / ONNX Runtime | rule-based classifier |
-| STT | Vosk / Silero | transcript passthrough |
+| Video capture | OpenCV | explicit source error |
+| Face detection | OpenCV / MediaPipe | metadata-based bbox fallback only when metadata exists |
+| STT | Vosk | empty transcript |
 | Voice emotion | SER model | prosody heuristics |
-| UI | PySide6 / OpenCV | HTML pseudo-GUI |
+| UI | PySide6 | HTML preview |
 
 ## Latency budget (MVP target)
 
@@ -89,19 +92,12 @@
 | Frame capture | 10–20 ms |
 | Face detect + preprocess | 25–40 ms |
 | Face emotion inference | 15–30 ms |
-| Audio chunk + STT | 60–80 ms |
-| Voice/text inference | 20–30 ms |
-| Fusion + UI | 5–10 ms |
+| Audio extraction / live buffer | 20–60 ms |
+| STT + text analysis | 40–90 ms |
+| Fusion + UI refresh | 5–10 ms |
 | **Total** | **≤ 200 ms target** |
 
-## Deployment model
+## Дополнительные документы
 
-- Primary: Windows laptop, local files + USB camera, CUDA inference.
-- Secondary: CPU fallback on Linux/macOS.
-- Optional: export to ONNX / CoreML for Mac M4.
-
-## Privacy and ethics
-
-- raw media should remain local by default;
-- collected data should be versioned separately and removed after training when policy requires it;
-- reports must describe bias, low-light failure modes, accent/noise sensitivity, and false conflict detection risk.
+- `docs/PROJECT_DETAILED_BREAKDOWN.md`
+- `docs/ADVANCED_TRAINING_GUIDE.md`

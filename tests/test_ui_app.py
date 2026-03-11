@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -16,20 +15,53 @@ from ui_app import _render_html_preview, run_pipeline
 class UiAppTests(unittest.TestCase):
     def test_pipeline_exports_expected_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            records = run_pipeline(
-                source="file",
-                path=str(Path(__file__).resolve().parents[1] / "examples" / "demo_input.json"),
-                results_dir=tmp_dir,
+            video_path = Path(tmp_dir) / "sample.mp4"
+            video_path.write_bytes(b"stub-video")
+            frames = iter(
+                [
+                    FramePacket(
+                        index=0,
+                        timestamp_ms=0,
+                        metadata={
+                            "hint_bbox": [10, 20, 100, 100],
+                            "hint_face_emotion": "JOY",
+                            "speech_text": "ты совсем тупой",
+                            "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
+                        },
+                    ),
+                    FramePacket(
+                        index=1,
+                        timestamp_ms=40,
+                        metadata={
+                            "hint_bbox": [10, 20, 100, 100],
+                            "hint_face_emotion": "NEUTRAL",
+                            "speech_text": "всё спокойно",
+                            "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
+                        },
+                    ),
+                    FramePacket(
+                        index=2,
+                        timestamp_ms=80,
+                        metadata={
+                            "hint_bbox": [10, 20, 100, 100],
+                            "hint_face_emotion": "NEUTRAL",
+                            "speech_text": "всё спокойно",
+                            "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
+                        },
+                    ),
+                ]
             )
+            with patch("ui_app.iter_video_frames", return_value=frames):
+                records = run_pipeline(source="file", path=str(video_path), results_dir=tmp_dir)
             self.assertTrue(records)
-            payload = json.loads((Path(tmp_dir) / "annotations.json").read_text(encoding="utf-8"))
-            self.assertEqual(payload["frames"][0]["final_emotion"], "CONFLICT")
-            self.assertEqual(payload["frames"][0]["source"], str(Path(__file__).resolve().parents[1] / "examples" / "demo_input.json"))
-            self.assertGreaterEqual(payload["frames"][0]["audio_level"], 0.0)
-            self.assertLessEqual(payload["frames"][0]["audio_level"], 1.0)
             self.assertTrue((Path(tmp_dir) / "annotations.csv").exists())
             self.assertTrue((Path(tmp_dir) / "ui_preview.html").exists())
             self.assertTrue((Path(tmp_dir) / "summary.txt").exists())
+            self.assertFalse((Path(tmp_dir) / "annotations.json").exists())
+            self.assertEqual(records[0]["final_emotion"], "CONFLICT")
+            self.assertEqual(records[0]["source"], str(video_path))
+            self.assertGreaterEqual(records[0]["audio_level"], 0.0)
+            self.assertLessEqual(records[0]["audio_level"], 1.0)
             summary = (Path(tmp_dir) / "summary.txt").read_text(encoding="utf-8")
             self.assertIn("Frames processed: 3", summary)
             self.assertIn("Detections: 3", summary)
@@ -40,12 +72,11 @@ class UiAppTests(unittest.TestCase):
 
     def test_pipeline_handles_empty_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            fixture = Path(tmp_dir) / "empty.json"
-            fixture.write_text(json.dumps({"video": "empty.mp4", "frames": [], "speech_segments": []}), encoding="utf-8")
-            records = run_pipeline(source="file", path=str(fixture), results_dir=tmp_dir)
+            video_path = Path(tmp_dir) / "empty.mp4"
+            video_path.write_bytes(b"stub-video")
+            with patch("ui_app.iter_video_frames", return_value=iter(())):
+                records = run_pipeline(source="file", path=str(video_path), results_dir=tmp_dir)
             self.assertEqual(records, [])
-            payload = json.loads((Path(tmp_dir) / "annotations.json").read_text(encoding="utf-8"))
-            self.assertEqual(payload["frames"], [])
             self.assertIn(
                 "No frames or detections",
                 (Path(tmp_dir) / "summary.txt").read_text(encoding="utf-8"),
@@ -107,8 +138,35 @@ class UiAppTests(unittest.TestCase):
             html_payload = preview_path.read_text(encoding="utf-8")
             self.assertIn("<video id='source-video'", html_payload)
             self.assertIn("controls preload='metadata'", html_payload)
-            self.assertIn("С начала", html_payload)
+            self.assertIn("seek-slider", html_payload)
+            self.assertIn("playback-rate", html_payload)
+            self.assertIn("fullscreen-toggle", html_payload)
             self.assertIn("тестовые субтитры", html_payload)
+
+    def test_pipeline_keeps_audio_and_subtitles_without_detected_face(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "speaker.mp4"
+            video_path.write_bytes(b"stub-video")
+            frames = iter(
+                [
+                    FramePacket(
+                        index=0,
+                        timestamp_ms=0,
+                        metadata={
+                            "image": object(),
+                            "speech_text": "ура, получилось",
+                            "voice_features": {"pitch": 0.7, "energy": 0.65, "tempo": 0.55},
+                        },
+                    )
+                ]
+            )
+            with patch("ui_app.iter_video_frames", return_value=frames):
+                records = run_pipeline(source="file", path=str(video_path), results_dir=tmp_dir, max_frames=1)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["face_emotion"], "NO_FACE")
+            self.assertEqual(records[0]["speech_text"], "ура, получилось")
+            self.assertGreater(records[0]["audio_level"], 0.0)
+            self.assertEqual(records[0]["source"], str(video_path))
 
 
 if __name__ == "__main__":
