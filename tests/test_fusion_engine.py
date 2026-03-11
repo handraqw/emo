@@ -10,12 +10,20 @@ from fusion_engine import FusionWeights, fuse_signals
 
 
 class FusionEngineTests(unittest.TestCase):
-    def test_face_and_voice_drive_result_without_text_signal(self) -> None:
+    def test_neutral_voice_edges_out_positive_face_without_text_signal(self) -> None:
         decision = fuse_signals(
             face_probs={"JOY": 0.8, "NEUTRAL": 0.1},
             voice_probs={"NEUTRAL": 0.7},
         )
         self.assertEqual(decision.final_emotion, "NEUTRAL")
+        self.assertEqual(decision.triggered_rules, [])
+
+    def test_face_and_voice_drive_result_without_text_signal(self) -> None:
+        decision = fuse_signals(
+            face_probs={"JOY": 0.9},
+            voice_probs={"ANGER": 0.2},
+        )
+        self.assertEqual(decision.final_emotion, "JOY")
         self.assertEqual(decision.triggered_rules, [])
 
     def test_voice_aggression_can_override_neutral_face(self) -> None:

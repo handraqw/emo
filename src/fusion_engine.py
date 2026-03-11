@@ -7,6 +7,8 @@ from utils.schemas import EMOTION_LABELS
 
 @dataclass(slots=True)
 class FusionWeights:
+    # Text signal has been removed, so its budget is redistributed to the
+    # remaining modalities while favoring voice as the only audio cue.
     face: float = 0.45
     voice: float = 0.55
 
