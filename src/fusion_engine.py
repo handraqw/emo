@@ -7,9 +7,10 @@ from utils.schemas import EMOTION_LABELS
 
 @dataclass(slots=True)
 class FusionWeights:
-    face: float = 0.4
-    voice: float = 0.35
-    text: float = 0.25
+    # Text signal has been removed, so its budget is redistributed to the
+    # remaining modalities while favoring voice as the only audio cue.
+    face: float = 0.45
+    voice: float = 0.55
 
 
 @dataclass(slots=True)
@@ -22,7 +23,6 @@ class FusionDecision:
 def fuse_signals(
     face_probs: dict[str, float],
     voice_probs: dict[str, float],
-    toxicity: dict[str, object],
     weights: FusionWeights | None = None,
 ) -> FusionDecision:
     weights = weights or FusionWeights()
@@ -36,21 +36,10 @@ def fuse_signals(
         if label in combined:
             combined[label] += value * weights.voice
 
-    text_label = str(toxicity.get("label", "NEUTRAL"))
-    text_score = float(toxicity.get("score", 0.0))
-    if text_label in combined:
-        combined[text_label] += text_score * weights.text
-    else:
-        combined["NEUTRAL"] += max(0.0, 1 - text_score) * weights.text
-
     face_confident_label = max(face_probs, key=face_probs.get)
     face_confident_score = float(face_probs.get(face_confident_label, 0.0))
     voice_aggression = float(voice_probs.get("AGGRESSION", 0.0))
     neutral_face = float(face_probs.get("NEUTRAL", 0.0))
-
-    if face_confident_label in {"JOY", "NEUTRAL", "SARCASM"} and face_confident_score >= 0.6 and text_score >= 0.6:
-        rules.append("happy_or_neutral_face_with_toxic_text")
-        return FusionDecision("CONFLICT", combined, rules)
 
     if voice_aggression >= 0.6 and neutral_face >= 0.6:
         rules.append("aggressive_voice_overrides_neutral_face")

@@ -249,11 +249,10 @@ def extract_speech_segments(source: str, path: str | None = None, frames: list[F
         if isinstance(embedded_segment, SpeechSegment):
             segments.append(embedded_segment)
             continue
-        text = frame.metadata.get("speech_text", "")
         has_audio_context = any(
             key in frame.metadata for key in ("voice_features", "audio_bytes", "sample_rate")
         )
-        if not text and not has_audio_context:
+        if not has_audio_context:
             continue
         metadata = {}
         if "voice_features" in frame.metadata:
@@ -266,7 +265,7 @@ def extract_speech_segments(source: str, path: str | None = None, frames: list[F
             SpeechSegment(
                 start_ms=frame.timestamp_ms,
                 end_ms=frame.timestamp_ms + 1000,
-                text=text,
+                text="",
                 metadata=metadata or {"voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3}},
             )
         )
