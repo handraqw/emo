@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 if "%EMO_RESULTS_DIR%"=="" (
     if "%USERPROFILE%"=="" (
-        set "EMO_RESULTS_DIR=%CD%\results"
+        set "EMO_RESULTS_DIR=%~dp0results"
     ) else (
         set "EMO_RESULTS_DIR=%USERPROFILE%\emo-results"
     )
