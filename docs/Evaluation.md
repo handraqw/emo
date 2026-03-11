@@ -12,4 +12,4 @@
 - промаркированный recorded dataset;
 - отдельный live-stream protocol;
 - macro F1 / accuracy / per-class precision-recall;
-- latency/FPS logs на Windows + NVIDIA 4060.
+- latency/FPS logs на Windows (CPU/GPU fallback).
