@@ -177,7 +177,12 @@ class UiAppTests(unittest.TestCase):
 
     def test_main_rejects_non_windows_runtime(self) -> None:
         with patch("ui_app.sys.platform", "linux"):
-            self.assertEqual(main(["--source", "camera"]), 1)
+            with self.assertLogs("ui_app", level="ERROR") as captured:
+                self.assertEqual(main(["--source", "camera"]), 1)
+        self.assertIn(
+            "Emotion AI MVP supports only Windows. Please run this application on Windows.",
+            "\n".join(captured.output),
+        )
 
 
 if __name__ == "__main__":
