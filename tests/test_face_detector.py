@@ -38,10 +38,32 @@ class FaceDetectorTests(unittest.TestCase):
         self.assertEqual(detections, [])
         cv2_stub.cvtColor.assert_not_called()
 
+    def test_empty_numpy_frame_is_ignored_before_opencv_conversion(self) -> None:
+        class FakeArray:
+            def __init__(self, size: int) -> None:
+                self.size = size
+                self.shape = (0, 0, 3) if size == 0 else (64, 64, 3)
+                self.ndim = 3
+                self.dtype = "uint8"
+
+        detector = FaceDetector()
+        frame = FramePacket(index=0, timestamp_ms=0, metadata={"image": FakeArray(size=0)})
+        detector._cascade = mock.Mock()
+        detector._cascade.empty.return_value = False
+        cv2_stub = mock.Mock()
+        cv2_stub.COLOR_BGR2GRAY = object()
+        with patch("face_detector.cv2", cv2_stub), patch("face_detector.np", mock.Mock(ndarray=FakeArray)):
+            detections = detector.detect(frame)
+        self.assertEqual(detections, [])
+        cv2_stub.cvtColor.assert_not_called()
+
     def test_numpy_frame_uses_opencv_detection_when_available(self) -> None:
         class FakeArray:
             def __init__(self) -> None:
                 self.size = 64 * 64 * 3
+                self.shape = (64, 64, 3)
+                self.ndim = 3
+                self.dtype = "uint8"
 
         detector = FaceDetector()
         frame = FramePacket(index=0, timestamp_ms=0, metadata={"image": FakeArray()})

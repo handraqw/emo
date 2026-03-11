@@ -30,7 +30,7 @@ class FaceDetector:
         if (
             np is not None
             and isinstance(image, np.ndarray)
-            and image.size
+            and image.size > 0
             and cv2 is not None
             and self._cascade is not None
             and not self._cascade.empty()
