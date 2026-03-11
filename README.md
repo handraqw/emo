@@ -21,7 +21,7 @@ JSON-сценарии и demo-режимы из пользовательског
 ## Python и платформы
 
 - Python: **3.10+**
-- основной target: **Windows / Linux**
+- основной target: **Windows**
 - CPU fallback поддерживается
 - если установлен Vosk и доступна русская модель, субтитры строятся локально офлайн
 
@@ -32,7 +32,6 @@ emo/
 ├─ README.md
 ├─ Architecture.md
 ├─ requirements.txt
-├─ setup.sh
 ├─ setup.bat
 ├─ data/
 ├─ docs/
@@ -47,20 +46,14 @@ emo/
 
 ### 1. Подготовка окружения
 
-```bash
-bash setup.sh
-```
-
-или в Windows:
-
 ```bat
 setup.bat
 ```
 
 ### 2. Запуск GUI
 
-```bash
-python src/ui_app.py --gui --results-dir /tmp/emo-results
+```bat
+python src/ui_app.py --gui --results-dir C:\emo-results
 ```
 
 В интерфейсе доступны:
@@ -74,14 +67,14 @@ python src/ui_app.py --gui --results-dir /tmp/emo-results
 
 Видео:
 
-```bash
-python src/ui_app.py --source file --path /absolute/path/to/video.mp4 --results-dir /tmp/emo-results
+```bat
+python src/ui_app.py --source file --path C:\path\to\video.mp4 --results-dir C:\emo-results
 ```
 
 Камера:
 
-```bash
-python src/ui_app.py --source camera --results-dir /tmp/emo-camera-results
+```bat
+python src/ui_app.py --source camera --results-dir C:\emo-camera-results
 ```
 
 Для ограничения длительности анализа можно добавить `--max-frames 100`.
@@ -93,12 +86,6 @@ python src/ui_app.py --source camera --results-dir /tmp/emo-camera-results
 1. Установите зависимости из `requirements.txt`.
 2. Подготовьте локальную Vosk-модель русского языка, например `vosk-model-small-ru-0.22`.
 3. Передайте путь через переменную окружения:
-
-```bash
-export EMO_VOSK_MODEL=/absolute/path/to/vosk-model-small-ru-0.22
-```
-
-или на Windows:
 
 ```bat
 set EMO_VOSK_MODEL=C:\path\to\vosk-model-small-ru-0.22

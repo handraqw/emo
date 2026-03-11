@@ -4,6 +4,7 @@ import argparse
 import csv
 import html
 import logging
+import sys
 from array import array
 from pathlib import Path
 
@@ -933,6 +934,10 @@ def launch_gui(results_dir: str = "results") -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.platform != "win32":
+        LOGGER.error("Emotion AI MVP supports only Windows.")
+        return 1
+
     parser = argparse.ArgumentParser(description="Emotion AI MVP UI")
     parser.add_argument("--source", choices=["file", "camera"], default=None)
     parser.add_argument("--path", default=None)

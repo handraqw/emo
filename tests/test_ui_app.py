@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from utils.schemas import FramePacket
-from ui_app import _render_html_preview, run_pipeline
+from ui_app import _render_html_preview, main, run_pipeline
 
 
 class UiAppTests(unittest.TestCase):
@@ -174,6 +174,10 @@ class UiAppTests(unittest.TestCase):
             self.assertEqual(records[0]["face_emotion"], "NO_FACE")
             self.assertGreater(records[0]["audio_level"], 0.0)
             self.assertEqual(records[0]["source"], str(video_path))
+
+    def test_main_rejects_non_windows_runtime(self) -> None:
+        with patch("ui_app.sys.platform", "linux"):
+            self.assertEqual(main(["--source", "camera"]), 1)
 
 
 if __name__ == "__main__":
