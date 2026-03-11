@@ -685,8 +685,6 @@ def launch_gui(results_dir: str = "results") -> int:
             self.seek_label.setText(
                 f"{self._format_media_time(position_ms)} / {self._format_media_time(duration_ms)}"
             )
-            if self._seek_is_active and self._video_player is not None:
-                self._video_player.setPosition(position_ms)
 
         def _sync_video_position(self, position_ms: int) -> None:
             if self._seek_is_active:
@@ -715,7 +713,6 @@ def launch_gui(results_dir: str = "results") -> int:
             self.seek_slider.setEnabled(True)
             self._video_player.stop()
             self._video_player.setSource(QUrl.fromLocalFile(path))
-            self._video_player.setPosition(0)
             self._video_player.play()
 
         def _open_video(self) -> None:
@@ -758,7 +755,7 @@ def launch_gui(results_dir: str = "results") -> int:
             if self._timer.isActive():
                 self._timer.stop()
             self._stop_microphone_monitor()
-            if self._video_player is not None and not persist:
+            if self._video_player is not None:
                 self._video_player.stop()
             if persist and self._records:
                 output_path = Path(self._output_dir)
@@ -773,13 +770,13 @@ def launch_gui(results_dir: str = "results") -> int:
                 return
             if self._timer.isActive():
                 self._timer.stop()
-                if self._video_player is not None and self._source == "file":
+                if self._video_player is not None:
                     self._video_player.pause()
                 self.pause_button.setText("Продолжить")
                 self.status.setText("Анализ поставлен на паузу")
                 return
             self._timer.start()
-            if self._video_player is not None and self._source == "file":
+            if self._video_player is not None:
                 self._video_player.play()
             self.pause_button.setText("Пауза")
             self.status.setText(f"Анализ продолжен: {self._path or self._source}")
