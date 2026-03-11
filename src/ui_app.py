@@ -818,14 +818,17 @@ def launch_gui(results_dir: str = "results") -> int:
                 painter.end()
 
             if record:
-                painter = QPainter(pixmap)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 x, y, w, h = record["bbox"]
                 if w > 0 and h > 0:
+                    painter = QPainter(pixmap)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                     painter.setPen(QPen(QColor("#fbbf24"), 4))
                     scale_x = pixmap.width() / max(frame.width, 1)
                     scale_y = pixmap.height() / max(frame.height, 1)
                     painter.drawRect(int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y))
+                else:
+                    painter = QPainter(pixmap)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.fillRect(20, 20, min(420, pixmap.width() - 40), 52, QColor(15, 23, 42, 220))
                 painter.setPen(QColor("#e2e8f0"))
                 painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))

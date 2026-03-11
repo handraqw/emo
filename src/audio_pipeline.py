@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import logging
 import os
 import shutil
 import subprocess
@@ -12,9 +13,9 @@ from pathlib import Path
 from utils.schemas import FramePacket, SpeechSegment
 
 try:
-    import imageio_ffmpeg
+    import imageio_ffmpeg as _imageio_ffmpeg_module
 except Exception:  # pragma: no cover - optional runtime dependency
-    imageio_ffmpeg = None
+    _imageio_ffmpeg_module = None
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 DEFAULT_SAMPLE_RATE = 16_000
@@ -22,15 +23,16 @@ WINDOW_MS = 30
 MIN_SEGMENT_MS = 350
 MAX_SILENCE_MS = 220
 MAX_LIVE_BUFFER_SECONDS = 3.0
+LOGGER = logging.getLogger(__name__)
 
 
 def _resolve_ffmpeg_binary() -> str | None:
     system_ffmpeg = shutil.which("ffmpeg")
     if system_ffmpeg:
         return system_ffmpeg
-    if imageio_ffmpeg is not None:
+    if _imageio_ffmpeg_module is not None:
         try:
-            return str(imageio_ffmpeg.get_ffmpeg_exe())
+            return str(_imageio_ffmpeg_module.get_ffmpeg_exe())
         except Exception:
             return None
     return None
@@ -39,6 +41,9 @@ def _resolve_ffmpeg_binary() -> str | None:
 def _extract_audio_track(video_path: str) -> tuple[array, int]:
     ffmpeg_binary = _resolve_ffmpeg_binary()
     if not ffmpeg_binary:
+        return array("h"), DEFAULT_SAMPLE_RATE
+    candidate = Path(video_path)
+    if not candidate.exists() or not candidate.is_file():
         return array("h"), DEFAULT_SAMPLE_RATE
 
     file_descriptor, temporary_name = tempfile.mkstemp(suffix=".wav")
@@ -50,7 +55,7 @@ def _extract_audio_track(video_path: str) -> tuple[array, int]:
             ffmpeg_binary,
             "-y",
             "-i",
-            video_path,
+            str(candidate),
             "-vn",
             "-ac",
             "1",
@@ -62,6 +67,12 @@ def _extract_audio_track(video_path: str) -> tuple[array, int]:
         ]
         completed = subprocess.run(command, capture_output=True, check=False)
         if completed.returncode != 0 or not wav_path.exists() or wav_path.stat().st_size == 0:
+            if completed.stderr:
+                LOGGER.warning(
+                    "ffmpeg audio extraction failed for %s: %s",
+                    candidate,
+                    completed.stderr.decode("utf-8", errors="ignore").strip(),
+                )
             return array("h"), DEFAULT_SAMPLE_RATE
         return _read_wave_samples(wav_path)
     finally:

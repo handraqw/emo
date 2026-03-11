@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
 from utils.schemas import SpeechSegment
 
 try:
-    from vosk import KaldiRecognizer, Model
+    from vosk import KaldiRecognizer as _KaldiRecognizer
+    from vosk import Model as _Model
 except Exception:  # pragma: no cover - optional runtime dependency
-    KaldiRecognizer = None
-    Model = None
+    _KaldiRecognizer = None
+    _Model = None
 
 
 class SpeechToTextService:
@@ -21,6 +23,8 @@ class SpeechToTextService:
     def __init__(self, model_path: str | None = None) -> None:
         self._model_path = self._resolve_model_path(model_path)
         self._model = None
+
+    LOGGER = logging.getLogger(__name__)
 
     def _resolve_model_path(self, model_path: str | None) -> str | None:
         candidates = [
@@ -37,19 +41,20 @@ class SpeechToTextService:
     def _load_model(self):
         if self._model is not None:
             return self._model
-        if Model is None or not self._model_path:
+        if _Model is None or not self._model_path:
             return None
         try:
-            self._model = Model(self._model_path)
-        except Exception:
+            self._model = _Model(self._model_path)
+        except Exception as exc:
+            self.LOGGER.warning("Unable to load Vosk model from %s: %s", self._model_path, exc)
             self._model = None
         return self._model
 
     def _transcribe_audio_bytes(self, audio_bytes: bytes, sample_rate: int) -> str:
         model = self._load_model()
-        if model is None or KaldiRecognizer is None or not audio_bytes:
+        if model is None or _KaldiRecognizer is None or not audio_bytes:
             return ""
-        recognizer = KaldiRecognizer(model, float(sample_rate))
+        recognizer = _KaldiRecognizer(model, float(sample_rate))
         recognizer.SetWords(True)
         for index in range(0, len(audio_bytes), 4000):
             recognizer.AcceptWaveform(audio_bytes[index : index + 4000])
