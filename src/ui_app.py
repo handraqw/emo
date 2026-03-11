@@ -4,6 +4,7 @@ import argparse
 import csv
 import html
 import logging
+import sys
 from array import array
 from pathlib import Path
 
@@ -85,7 +86,6 @@ def _display_audio_level(record: dict, microphone_level: float = 0.0, source: st
 def _render_html_preview(records: list[dict], output_path: Path, source_ref: str | None) -> None:
     stats = _collect_run_stats(records, source_ref=source_ref)
     latest = records[-1] if records else {}
-    subtitle_text = html.escape(str(latest.get("speech_text", "") or "Субтитры появятся после распознавания речи"))
     audio_percent = int(min(max(float(latest.get("audio_level", 0.0)), 0.0), 1.0) * 100)
     source_path = Path(source_ref) if source_ref else None
     is_video_source = bool(
@@ -98,7 +98,6 @@ def _render_html_preview(records: list[dict], output_path: Path, source_ref: str
             "<tr>"
             f"<td>{item['timestamp_ms']}</td>"
             f"<td>{html.escape(str(item['face_emotion']))}</td>"
-            f"<td>{html.escape(str(item['speech_text']))}</td>"
             f"<td>{int(float(item.get('audio_level', 0.0)) * 100)}%</td>"
             f"<td>{html.escape(str(item['final_emotion']))}</td>"
             "</tr>"
@@ -159,7 +158,6 @@ body {{ font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #
 .transport-meta {{ display: inline-flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 14px; }}
 .seek-slider {{ flex: 1; accent-color: #fbbf24; min-width: 220px; }}
 .timecode {{ min-width: 118px; color: #cbd5e1; font-variant-numeric: tabular-nums; }}
-.subtitle {{ margin-top: 16px; padding: 12px 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.88); font-size: 18px; min-height: 52px; }}
 .audio-meter {{ margin-top: 16px; }}
 .audio-track {{ height: 18px; width: 100%; border-radius: 999px; overflow: hidden; background: #0f172a; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #334155; position: relative; }}
 .audio-track span:nth-child(1) {{ background: #16a34a; }}
@@ -180,7 +178,6 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <h1>Emotion AI System — Analysis Preview</h1>
     <p>Source: {html.escape(stats['source'])}</p>
     {video_markup}
-    <div class='subtitle'>{subtitle_text}</div>
     <div class='audio-meter'>
       <div class='audio-track'>
         <span></span><span></span><span></span>
@@ -193,7 +190,6 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel mono'>{html.escape(_render_summary(records, source_ref=source_ref))}</div>
     <div class='panel'>
       <div class='final'>{html.escape(str(latest.get('final_emotion', 'N/A')))}</div>
-      <p>Speech text: {html.escape(str(latest.get('speech_text', '')))}</p>
       <p>Audio level: {audio_percent}%</p>
       <p>Toxicity: {latest.get('text_toxicity_score', 0.0)}</p>
       <p>Frames processed: {stats['frames_processed']}</p>
@@ -203,7 +199,7 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel'>
       <h3>Timeline</h3>
       <table>
-        <thead><tr><th>t, ms</th><th>Face</th><th>Speech</th><th>Audio</th><th>Final</th></tr></thead>
+        <thead><tr><th>t, ms</th><th>Face</th><th>Audio</th><th>Final</th></tr></thead>
         <tbody>{rows}</tbody>
       </table>
     </div>
@@ -325,7 +321,6 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
                 "face_id": None,
                 "face_emotion": "NO_FACE",
                 "face_confidence": 0.0,
-                "speech_text": transcript,
                 "audio_level": audio_level,
                 "text_toxicity_label": toxicity["label"],
                 "text_toxicity_score": toxicity["score"],
@@ -354,7 +349,6 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
                 "face_id": detection.face_id,
                 "face_emotion": face_emotion,
                 "face_confidence": round(face_probs[face_emotion], 2),
-                "speech_text": transcript,
                 "audio_level": audio_level,
                 "text_toxicity_label": toxicity["label"],
                 "text_toxicity_score": toxicity["score"],
@@ -467,14 +461,24 @@ def run_pipeline(
 
 def launch_gui(results_dir: str = "results") -> int:
     try:
-        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtCore import QUrl, Qt, QTimer
         from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
         try:
-            from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+            from PySide6.QtMultimedia import (
+                QAudioFormat,
+                QAudioOutput,
+                QAudioSource,
+                QMediaDevices,
+                QMediaPlayer,
+            )
+            from PySide6.QtMultimediaWidgets import QVideoWidget
         except Exception:  # pragma: no cover - optional multimedia backend
             QAudioFormat = None
+            QAudioOutput = None
             QAudioSource = None
             QMediaDevices = None
+            QMediaPlayer = None
+            QVideoWidget = None
         from PySide6.QtWidgets import (
             QApplication,
             QFileDialog,
@@ -483,6 +487,8 @@ def launch_gui(results_dir: str = "results") -> int:
             QMainWindow,
             QMessageBox,
             QPushButton,
+            QSlider,
+            QStackedWidget,
             QTableWidget,
             QTableWidgetItem,
             QTextEdit,
@@ -543,6 +549,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self._audio_source = None
             self._audio_device = None
             self._microphone_buffer = array("h")
+            self._seek_is_active = False
             self._timer = QTimer(self)
             self._timer.setInterval(40)
             self._timer.timeout.connect(self._process_next_frame)
@@ -579,22 +586,43 @@ def launch_gui(results_dir: str = "results") -> int:
             self.restart_button.setEnabled(False)
             controls.addWidget(self.restart_button)
 
+            self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+            self.seek_slider.setRange(0, 0)
+            self.seek_slider.setEnabled(False)
+            self.seek_slider.sliderPressed.connect(self._begin_video_seek)
+            self.seek_slider.sliderReleased.connect(self._end_video_seek)
+            self.seek_slider.valueChanged.connect(self._preview_seek_position)
+            controls.addWidget(self.seek_slider, stretch=1)
+
+            self.seek_label = QLabel("00:00 / 00:00")
+            self.seek_label.setStyleSheet("color:#cbd5e1;font-variant-numeric:tabular-nums;")
+            controls.addWidget(self.seek_label)
+
+            self.preview_stack = QStackedWidget()
+            left.addWidget(self.preview_stack)
+
             self.preview = QLabel("Выберите камеру или видео для анализа")
             self.preview.setMinimumSize(720, 420)
             self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.preview.setStyleSheet(
                 "background:#111827;color:#e2e8f0;border-radius:16px;padding:12px;font-size:18px;"
             )
-            left.addWidget(self.preview)
+            self.preview_stack.addWidget(self.preview)
 
-            self.subtitle_label = QLabel("Субтитры появятся здесь после распознавания речи")
-            self.subtitle_label.setWordWrap(True)
-            self.subtitle_label.setMinimumHeight(56)
-            self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.subtitle_label.setStyleSheet(
-                "background:#0f172a;color:#e2e8f0;border-radius:14px;padding:12px;font-size:18px;"
-            )
-            left.addWidget(self.subtitle_label)
+            self.video_widget = QVideoWidget() if QVideoWidget is not None else None
+            self._video_player = None
+            self._video_audio_output = None
+            if self.video_widget is not None and QMediaPlayer is not None:
+                self.video_widget.setMinimumSize(720, 420)
+                self.video_widget.setStyleSheet("background:#020617;border-radius:16px;")
+                self.preview_stack.addWidget(self.video_widget)
+                self._video_player = QMediaPlayer(self)
+                if QAudioOutput is not None:
+                    self._video_audio_output = QAudioOutput(self)
+                    self._video_player.setAudioOutput(self._video_audio_output)
+                self._video_player.setVideoOutput(self.video_widget)
+                self._video_player.positionChanged.connect(self._sync_video_position)
+                self._video_player.durationChanged.connect(self._sync_video_duration)
 
             self.audio_meter = AudioLevelWidget()
             left.addWidget(self.audio_meter)
@@ -614,14 +642,63 @@ def launch_gui(results_dir: str = "results") -> int:
             self.metrics.setMinimumHeight(160)
             right.addWidget(self.metrics)
 
-            self.timeline = QTableWidget(0, 5)
-            self.timeline.setHorizontalHeaderLabels(["t, ms", "Лицо", "Речь", "Аудио", "Итог"])
+            self.timeline = QTableWidget(0, 4)
+            self.timeline.setHorizontalHeaderLabels(["t, ms", "Лицо", "Аудио", "Итог"])
             self.timeline.horizontalHeader().setStretchLastSection(True)
             right.addWidget(self.timeline)
 
         def closeEvent(self, event) -> None:
             self._stop_analysis()
             super().closeEvent(event)
+
+        @staticmethod
+        def _format_media_time(position_ms: int) -> str:
+            total_seconds = max(int(position_ms // 1000), 0)
+            minutes, seconds = divmod(total_seconds, 60)
+            return f"{minutes:02d}:{seconds:02d}"
+
+        def _begin_video_seek(self) -> None:
+            self._seek_is_active = True
+
+        def _end_video_seek(self) -> None:
+            self._seek_is_active = False
+            if self._video_player is not None:
+                self._video_player.setPosition(self.seek_slider.value())
+
+        def _preview_seek_position(self, position_ms: int) -> None:
+            duration_ms = self.seek_slider.maximum()
+            self.seek_label.setText(
+                f"{self._format_media_time(position_ms)} / {self._format_media_time(duration_ms)}"
+            )
+
+        def _sync_video_position(self, position_ms: int) -> None:
+            if self._seek_is_active:
+                return
+            self.seek_slider.setValue(int(position_ms))
+
+        def _sync_video_duration(self, duration_ms: int) -> None:
+            self.seek_slider.setRange(0, max(int(duration_ms), 0))
+            self._preview_seek_position(self.seek_slider.value())
+
+        def _configure_video_player(self, path: str | None) -> None:
+            has_video_player = self._video_player is not None and self.video_widget is not None
+            if not has_video_player or not path:
+                if self._video_player is not None:
+                    self._video_player.stop()
+                self.seek_slider.blockSignals(True)
+                self.seek_slider.setRange(0, 0)
+                self.seek_slider.setValue(0)
+                self.seek_slider.blockSignals(False)
+                self.seek_slider.setEnabled(False)
+                self.seek_label.setText("00:00 / 00:00")
+                self.preview_stack.setCurrentWidget(self.preview)
+                return
+
+            self.preview_stack.setCurrentWidget(self.video_widget)
+            self.seek_slider.setEnabled(True)
+            self._video_player.stop()
+            self._video_player.setSource(QUrl.fromLocalFile(path))
+            self._video_player.play()
 
         def _open_video(self) -> None:
             path, _ = QFileDialog.getOpenFileName(
@@ -647,9 +724,9 @@ def launch_gui(results_dir: str = "results") -> int:
             self.timeline.setRowCount(0)
             self.metrics.clear()
             self.final_label.setText("Итоговая эмоция: анализ...")
-            self.subtitle_label.setText("Субтитры появятся здесь после распознавания речи")
             self.audio_meter.set_level(0.0)
             self.status.setText(f"Анализ: {path or source}")
+            self._configure_video_player(path if source == "file" else None)
             self._frame_iter = iter_video_frames(source=source, path=path)
             self.pause_button.setText("Пауза")
             self.pause_button.setEnabled(bool(path))
@@ -662,6 +739,8 @@ def launch_gui(results_dir: str = "results") -> int:
             if self._timer.isActive():
                 self._timer.stop()
             self._stop_microphone_monitor()
+            if self._video_player is not None:
+                self._video_player.stop()
             if persist and self._records:
                 output_path = Path(self._output_dir)
                 output_path.mkdir(parents=True, exist_ok=True)
@@ -675,10 +754,14 @@ def launch_gui(results_dir: str = "results") -> int:
                 return
             if self._timer.isActive():
                 self._timer.stop()
+                if self._video_player is not None:
+                    self._video_player.pause()
                 self.pause_button.setText("Продолжить")
                 self.status.setText("Анализ поставлен на паузу")
                 return
             self._timer.start()
+            if self._video_player is not None:
+                self._video_player.play()
             self.pause_button.setText("Пауза")
             self.status.setText(f"Анализ продолжен: {self._path or self._source}")
 
@@ -774,7 +857,6 @@ def launch_gui(results_dir: str = "results") -> int:
             values = [
                 str(record["timestamp_ms"]),
                 str(record["face_emotion"]),
-                str(record["speech_text"]),
                 f"{int(float(record.get('audio_level', 0.0)) * 100)}%",
                 str(record["final_emotion"]),
             ]
@@ -792,11 +874,9 @@ def launch_gui(results_dir: str = "results") -> int:
                         f"Speech sentiment: {record['voice_emotion']} ({record['voice_confidence']})",
                         f"Toxicity: {record['text_toxicity_label']} ({record['text_toxicity_score']})",
                         f"Audio level: {int(float(record.get('audio_level', 0.0)) * 100)}%",
-                        f"Текст: {record['speech_text'] or '—'}",
                     ]
                 )
             )
-            self.subtitle_label.setText(record["speech_text"] or "Субтитры появятся здесь после распознавания речи")
             level = _display_audio_level(record, microphone_level=self._microphone_level, source=self._source)
             self.audio_meter.set_level(level)
             self.status.setText(f"Последний кадр: {record['timestamp_ms']} ms")
@@ -854,6 +934,10 @@ def launch_gui(results_dir: str = "results") -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.platform != "win32":
+        LOGGER.error("Emotion AI MVP supports only Windows. Please run this application on Windows.")
+        return 1
+
     parser = argparse.ArgumentParser(description="Emotion AI MVP UI")
     parser.add_argument("--source", choices=["file", "camera"], default=None)
     parser.add_argument("--path", default=None)

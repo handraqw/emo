@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional runtime dependency
+    np = None
+
 from utils.schemas import FaceDetection, FramePacket
 
 try:
@@ -22,7 +27,14 @@ class FaceDetector:
 
     def detect(self, frame: FramePacket) -> list[FaceDetection]:
         image = frame.metadata.get("image")
-        if image is not None and cv2 is not None and self._cascade is not None and not self._cascade.empty():
+        if (
+            np is not None
+            and isinstance(image, np.ndarray)
+            and image.size > 0
+            and cv2 is not None
+            and self._cascade is not None
+            and not self._cascade.empty()
+        ):
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             boxes = self._cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(48, 48))
             if len(boxes):
