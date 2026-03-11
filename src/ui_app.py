@@ -467,14 +467,24 @@ def run_pipeline(
 
 def launch_gui(results_dir: str = "results") -> int:
     try:
-        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtCore import QUrl, Qt, QTimer
         from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
         try:
-            from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+            from PySide6.QtMultimedia import (
+                QAudioFormat,
+                QAudioOutput,
+                QAudioSource,
+                QMediaDevices,
+                QMediaPlayer,
+            )
+            from PySide6.QtMultimediaWidgets import QVideoWidget
         except Exception:  # pragma: no cover - optional multimedia backend
             QAudioFormat = None
+            QAudioOutput = None
             QAudioSource = None
             QMediaDevices = None
+            QMediaPlayer = None
+            QVideoWidget = None
         from PySide6.QtWidgets import (
             QApplication,
             QFileDialog,
@@ -483,6 +493,8 @@ def launch_gui(results_dir: str = "results") -> int:
             QMainWindow,
             QMessageBox,
             QPushButton,
+            QSlider,
+            QStackedWidget,
             QTableWidget,
             QTableWidgetItem,
             QTextEdit,
@@ -543,6 +555,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self._audio_source = None
             self._audio_device = None
             self._microphone_buffer = array("h")
+            self._seek_is_active = False
             self._timer = QTimer(self)
             self._timer.setInterval(40)
             self._timer.timeout.connect(self._process_next_frame)
@@ -579,13 +592,43 @@ def launch_gui(results_dir: str = "results") -> int:
             self.restart_button.setEnabled(False)
             controls.addWidget(self.restart_button)
 
+            self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+            self.seek_slider.setRange(0, 0)
+            self.seek_slider.setEnabled(False)
+            self.seek_slider.sliderPressed.connect(self._begin_video_seek)
+            self.seek_slider.sliderReleased.connect(self._end_video_seek)
+            self.seek_slider.valueChanged.connect(self._preview_seek_position)
+            controls.addWidget(self.seek_slider, stretch=1)
+
+            self.seek_label = QLabel("00:00 / 00:00")
+            self.seek_label.setStyleSheet("color:#cbd5e1;font-variant-numeric:tabular-nums;")
+            controls.addWidget(self.seek_label)
+
+            self.preview_stack = QStackedWidget()
+            left.addWidget(self.preview_stack)
+
             self.preview = QLabel("Выберите камеру или видео для анализа")
             self.preview.setMinimumSize(720, 420)
             self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.preview.setStyleSheet(
                 "background:#111827;color:#e2e8f0;border-radius:16px;padding:12px;font-size:18px;"
             )
-            left.addWidget(self.preview)
+            self.preview_stack.addWidget(self.preview)
+
+            self.video_widget = QVideoWidget() if QVideoWidget is not None else None
+            self._video_player = None
+            self._video_audio_output = None
+            if self.video_widget is not None and QMediaPlayer is not None:
+                self.video_widget.setMinimumSize(720, 420)
+                self.video_widget.setStyleSheet("background:#020617;border-radius:16px;")
+                self.preview_stack.addWidget(self.video_widget)
+                self._video_player = QMediaPlayer(self)
+                if QAudioOutput is not None:
+                    self._video_audio_output = QAudioOutput(self)
+                    self._video_player.setAudioOutput(self._video_audio_output)
+                self._video_player.setVideoOutput(self.video_widget)
+                self._video_player.positionChanged.connect(self._sync_video_position)
+                self._video_player.durationChanged.connect(self._sync_video_duration)
 
             self.subtitle_label = QLabel("Субтитры появятся здесь после распознавания речи")
             self.subtitle_label.setWordWrap(True)
@@ -623,6 +666,58 @@ def launch_gui(results_dir: str = "results") -> int:
             self._stop_analysis()
             super().closeEvent(event)
 
+        @staticmethod
+        def _format_media_time(position_ms: int) -> str:
+            total_seconds = max(int(position_ms // 1000), 0)
+            minutes, seconds = divmod(total_seconds, 60)
+            return f"{minutes:02d}:{seconds:02d}"
+
+        def _begin_video_seek(self) -> None:
+            self._seek_is_active = True
+
+        def _end_video_seek(self) -> None:
+            self._seek_is_active = False
+            if self._video_player is not None:
+                self._video_player.setPosition(self.seek_slider.value())
+
+        def _preview_seek_position(self, position_ms: int) -> None:
+            duration_ms = self.seek_slider.maximum()
+            self.seek_label.setText(
+                f"{self._format_media_time(position_ms)} / {self._format_media_time(duration_ms)}"
+            )
+            if self._seek_is_active and self._video_player is not None:
+                self._video_player.setPosition(position_ms)
+
+        def _sync_video_position(self, position_ms: int) -> None:
+            if self._seek_is_active:
+                return
+            self.seek_slider.setValue(int(position_ms))
+
+        def _sync_video_duration(self, duration_ms: int) -> None:
+            self.seek_slider.setRange(0, max(int(duration_ms), 0))
+            self._preview_seek_position(self.seek_slider.value())
+
+        def _configure_video_player(self, path: str | None) -> None:
+            has_video_player = self._video_player is not None and self.video_widget is not None
+            if not has_video_player or not path:
+                if self._video_player is not None:
+                    self._video_player.stop()
+                self.seek_slider.blockSignals(True)
+                self.seek_slider.setRange(0, 0)
+                self.seek_slider.setValue(0)
+                self.seek_slider.blockSignals(False)
+                self.seek_slider.setEnabled(False)
+                self.seek_label.setText("00:00 / 00:00")
+                self.preview_stack.setCurrentWidget(self.preview)
+                return
+
+            self.preview_stack.setCurrentWidget(self.video_widget)
+            self.seek_slider.setEnabled(True)
+            self._video_player.stop()
+            self._video_player.setSource(QUrl.fromLocalFile(path))
+            self._video_player.setPosition(0)
+            self._video_player.play()
+
         def _open_video(self) -> None:
             path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -650,6 +745,7 @@ def launch_gui(results_dir: str = "results") -> int:
             self.subtitle_label.setText("Субтитры появятся здесь после распознавания речи")
             self.audio_meter.set_level(0.0)
             self.status.setText(f"Анализ: {path or source}")
+            self._configure_video_player(path if source == "file" else None)
             self._frame_iter = iter_video_frames(source=source, path=path)
             self.pause_button.setText("Пауза")
             self.pause_button.setEnabled(bool(path))
@@ -662,6 +758,8 @@ def launch_gui(results_dir: str = "results") -> int:
             if self._timer.isActive():
                 self._timer.stop()
             self._stop_microphone_monitor()
+            if self._video_player is not None and not persist:
+                self._video_player.stop()
             if persist and self._records:
                 output_path = Path(self._output_dir)
                 output_path.mkdir(parents=True, exist_ok=True)
@@ -675,10 +773,14 @@ def launch_gui(results_dir: str = "results") -> int:
                 return
             if self._timer.isActive():
                 self._timer.stop()
+                if self._video_player is not None and self._source == "file":
+                    self._video_player.pause()
                 self.pause_button.setText("Продолжить")
                 self.status.setText("Анализ поставлен на паузу")
                 return
             self._timer.start()
+            if self._video_player is not None and self._source == "file":
+                self._video_player.play()
             self.pause_button.setText("Пауза")
             self.status.setText(f"Анализ продолжен: {self._path or self._source}")
 
