@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Iterator
 
@@ -29,26 +28,6 @@ BROW_LOWER_LIFT_WEIGHT = 0.4
 
 class VideoSourceError(RuntimeError):
     """Raised when a requested camera or video source cannot be read."""
-
-
-def _load_json_payload(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def _frames_from_payload(payload: dict) -> list[FramePacket]:
-    frames = []
-    for index, item in enumerate(payload.get("frames", [])):
-        frames.append(
-            FramePacket(
-                index=index,
-                timestamp_ms=int(item.get("timestamp_ms", index * 40)),
-                width=int(item.get("width", 1280)),
-                height=int(item.get("height", 720)),
-                metadata={k: v for k, v in item.items() if k not in {"timestamp_ms", "width", "height"}},
-            )
-        )
-    return frames
 
 
 def _build_visual_metadata(image) -> dict:
@@ -139,24 +118,8 @@ def _iter_cv2_frames(path: str | None = None, max_frames: int | None = None) -> 
             index += 1
     finally:
         capture.release()
-
-
-def _iter_synthetic_frames(max_frames: int | None = None) -> Iterator[FramePacket]:
-    for index in range(max_frames or 3):
-        yield FramePacket(
-            index=index,
-            timestamp_ms=index * 40,
-            metadata={
-                "hint_bbox": [420, 180, 280, 280],
-                "hint_face_emotion": "NEUTRAL" if index else "JOY",
-                "speech_text": "всё спокойно" if index else "ну конечно, ты опять опоздал",
-                "voice_features": {"pitch": 0.35 + index * 0.1, "energy": 0.25 + index * 0.2, "tempo": 0.3},
-            },
-        )
-
-
 def iter_video_frames(source: str, path: str | None = None, max_frames: int | None = None) -> Iterator[FramePacket]:
-    """Yield frames from JSON fixtures or real OpenCV-backed camera/video streams."""
+    """Yield frames from real OpenCV-backed camera or uploaded video streams."""
     if source not in {"file", "camera"}:
         raise ValueError(f"Unsupported source: {source}")
 
@@ -167,11 +130,10 @@ def iter_video_frames(source: str, path: str | None = None, max_frames: int | No
         candidate = Path(path)
         if not candidate.exists():
             raise FileNotFoundError(f"Input path does not exist: {candidate}")
-        if candidate.suffix.lower() == ".json":
-            frames = _frames_from_payload(_load_json_payload(candidate))
-            for frame in frames[:max_frames]:
-                yield frame
-            return
+        if candidate.suffix.lower() not in {".mp4", ".avi", ".mov", ".mkv", ".webm"}:
+            raise VideoSourceError(
+                "Поддерживаются только видеофайлы .mp4, .avi, .mov, .mkv и .webm."
+            )
         frame_iter = _iter_cv2_frames(path=str(candidate), max_frames=max_frames)
         first_frame = next(frame_iter, None)
         if first_frame is None:

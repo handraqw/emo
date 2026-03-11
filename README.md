@@ -1,27 +1,34 @@
 # Emotion AI System MVP
 
-Локальный Python MVP для мультимодального распознавания эмоций в видеопотоке с приоритетом запуска на Windows + NVIDIA 4060 8 GB VRAM и CPU fallback для других платформ.
+Локальный Python MVP для мультимодального анализа эмоций по видео и аудио. Приложение работает в двух пользовательских режимах:
 
-## Что уже реализовано
+- поток с камеры;
+- загрузка готового видеофайла.
 
-- архитектурный скелет проекта с разбиением на `video_pipeline`, `audio_pipeline`, `fusion`, `inference`, `ui`;
-- локальный demo pipeline без обязательных внешних зависимостей;
-- pluggable backends для MediaPipe / OpenCV / Vosk / PyTorch, которые можно подключить позднее;
-- rule-based baseline для face / voice / text анализа с детекцией `CONFLICT`;
-- экспорт результатов в JSON, CSV и HTML preview;
-- базовые unit tests и CI workflow.
+JSON-сценарии и demo-режимы из пользовательского потока удалены.
+
+## Что умеет проект сейчас
+
+- захватывает кадры из камеры или из загруженного видеофайла;
+- детектирует лицо и считает базовые facial cues;
+- извлекает аудио из видеофайла и строит сегменты речи;
+- получает субтитры через `SpeechToTextService` (если доступна Vosk-модель);
+- считает голосовые признаки `pitch / energy / tempo` даже без текста;
+- объединяет face / voice / text сигналы через `fusion_engine`;
+- показывает результат в GUI и экспортирует отчёт в `CSV`, `HTML` и `summary.txt`;
+- сохраняет HTML preview с нормальной панелью управления видео.
 
 ## Python и платформы
 
-- Python: **3.10+** (проверено на 3.12)
-- приоритетный target: **Windows + NVIDIA 4060 8 GB**
-- fallback: Linux/macOS CPU
-- Mac M4: поддерживается как CPU/ONNX fallback, CoreML описан как следующий шаг
+- Python: **3.10+**
+- основной target: **Windows / Linux**
+- CPU fallback поддерживается
+- если установлен Vosk и доступна русская модель, субтитры строятся локально офлайн
 
 ## Структура репозитория
 
 ```text
-emotion-ai-system/
+emo/
 ├─ README.md
 ├─ Architecture.md
 ├─ requirements.txt
@@ -30,7 +37,6 @@ emotion-ai-system/
 ├─ data/
 ├─ docs/
 ├─ experiments/
-├─ examples/
 ├─ notebooks/
 ├─ reports/
 ├─ src/
@@ -45,71 +51,71 @@ emotion-ai-system/
 bash setup.sh
 ```
 
-Или в Windows PowerShell / cmd:
+или в Windows:
 
 ```bat
 setup.bat
 ```
 
-### 2. Графический интерфейс
+### 2. Запуск GUI
 
 ```bash
 python src/ui_app.py --gui --results-dir /tmp/emo-results
 ```
 
-В GUI доступны:
+В интерфейсе доступны:
 
-- запуск анализа эмоций с камеры в реальном времени без подмены synthetic demo-потоком;
-- загрузка видеофайла (`.mp4`, `.avi`, `.mov`, `.mkv`) для покадрового анализа с явной ошибкой, если файл не читается;
-- открытие JSON demo-сценария как отдельного режима;
-- сохранение результатов в `JSON`, `CSV`, `HTML` и `summary.txt`.
+- **Камера** — потоковое видео с live-анализом;
+- **Загрузить видео** — анализ видеофайла `.mp4`, `.avi`, `.mov`, `.mkv`, `.webm`;
+- **Пауза / Заново / Стоп** — базовое управление анализом;
+- сохранение результатов в `annotations.csv`, `ui_preview.html`, `summary.txt`.
 
-### 3. Demo режим с файлом
+### 3. Запуск через CLI
+
+Видео:
 
 ```bash
-python src/ui_app.py --source file --path examples/demo_input.json --results-dir /tmp/emo-results
+python src/ui_app.py --source file --path /absolute/path/to/video.mp4 --results-dir /tmp/emo-results
 ```
 
-### 4. Demo режим с камерой
+Камера:
 
 ```bash
 python src/ui_app.py --source camera --results-dir /tmp/emo-camera-results
 ```
 
-Для ограничения длительности live/demo режима можно добавить `--max-frames 100`.
+Для ограничения длительности анализа можно добавить `--max-frames 100`.
 
-## Поддерживаемые артефакты
+## Что нужно для субтитров
 
-После запуска UI pipeline создаёт:
+Субтитры и текстовый анализ работают через `SpeechToTextService`.
 
-- `annotations.json` — покадровая разметка;
-- `annotations.csv` — плоский экспорт для анализа;
-- `ui_preview.html` — pseudo-GUI preview для демонстрации;
-- `summary.txt` — человекочитаемый итог.
+1. Установите зависимости из `requirements.txt`.
+2. Подготовьте локальную Vosk-модель русского языка, например `vosk-model-small-ru-0.22`.
+3. Передайте путь через переменную окружения:
 
-## Что считается MVP в этом репозитории
+```bash
+export EMO_VOSK_MODEL=/absolute/path/to/vosk-model-small-ru-0.22
+```
 
-Текущая реализация отдаёт **рабочий локальный baseline**, который:
+или на Windows:
 
-1. читает JSON-файл, видеозапись или поток с камеры;
-2. находит/нормализует лицо;
-3. оценивает face emotion;
-4. обрабатывает speech segment → STT → toxicity + voice emotion;
-5. объединяет сигналы через `fusion_engine`;
-6. показывает live GUI preview и экспортирует результаты.
+```bat
+set EMO_VOSK_MODEL=C:\path\to\vosk-model-small-ru-0.22
+```
 
-Это baseline-реализация для дальнейшего подключения реальных моделей MediaPipe/Vosk/PyTorch/ONNX. В коде предусмотрены адаптеры и точки расширения, чтобы заменить эвристики на обученные модели без смены интерфейсов.
+Если модель не найдена, приложение всё равно считает голосовые признаки и эмоцию по голосу, но текстовые субтитры останутся пустыми.
 
-## Ограничения текущего baseline
+## Выходные артефакты
 
-- точность 95/98% не заявляется для rule-based baseline без дообучения;
-- экспорт реального annotated video и live GPU inference требуют установки optional зависимостей;
-- training scripts реализованы как scaffold + baseline checkpoint flow, а не как full ResNet/SER training loop.
+После анализа создаются:
 
-## Следующий шаг для production-like MVP
+- `annotations.csv` — покадровый экспорт;
+- `ui_preview.html` — HTML preview с видеоплеером и timeline;
+- `summary.txt` — итоговая текстовая сводка.
 
-- подключить MediaPipe/OpenCV в `face_detector.py`;
-- заменить baseline `FaceEmotionInference` на ResNet18 checkpoint;
-- заменить `SpeechToTextService` на Vosk/Silero;
-- заменить `VoiceEmotionAnalyzer` на SER модель;
-- экспортировать модели в ONNX и проверить latency на целевом ноутбуке.
+## Подробная документация
+
+- `Architecture.md` — краткая схема компонентов;
+- `docs/PROJECT_DETAILED_BREAKDOWN.md` — максимально подробный разбор запуска, файлов, логики и формул;
+- `docs/ADVANCED_TRAINING_GUIDE.md` — максимально подробный гайд по дополнительному обучению и расширению системы.

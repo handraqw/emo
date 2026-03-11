@@ -13,7 +13,7 @@ from utils.schemas import FramePacket
 
 
 class FaceDetectorTests(unittest.TestCase):
-    def test_real_frame_without_detected_face_does_not_get_demo_bbox(self) -> None:
+    def test_real_frame_without_detected_face_does_not_get_fallback_bbox(self) -> None:
         detector = FaceDetector()
         frame = FramePacket(index=0, timestamp_ms=0, metadata={"image": mock.Mock(name="real_image_frame")})
         detector._cascade = mock.Mock()
