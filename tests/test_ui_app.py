@@ -25,7 +25,6 @@ class UiAppTests(unittest.TestCase):
                         metadata={
                             "hint_bbox": [10, 20, 100, 100],
                             "hint_face_emotion": "JOY",
-                            "speech_text": "ты совсем тупой",
                             "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
                         },
                     ),
@@ -35,7 +34,6 @@ class UiAppTests(unittest.TestCase):
                         metadata={
                             "hint_bbox": [10, 20, 100, 100],
                             "hint_face_emotion": "NEUTRAL",
-                            "speech_text": "всё спокойно",
                             "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
                         },
                     ),
@@ -45,7 +43,6 @@ class UiAppTests(unittest.TestCase):
                         metadata={
                             "hint_bbox": [10, 20, 100, 100],
                             "hint_face_emotion": "NEUTRAL",
-                            "speech_text": "всё спокойно",
                             "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
                         },
                     ),
@@ -58,9 +55,11 @@ class UiAppTests(unittest.TestCase):
             self.assertTrue((Path(tmp_dir) / "ui_preview.html").exists())
             self.assertTrue((Path(tmp_dir) / "summary.txt").exists())
             self.assertFalse((Path(tmp_dir) / "annotations.json").exists())
-            self.assertEqual(records[0]["final_emotion"], "CONFLICT")
+            self.assertEqual(records[0]["final_emotion"], "NEUTRAL")
             self.assertEqual(records[0]["source"], str(video_path))
             self.assertNotIn("speech_text", records[0])
+            self.assertNotIn("text_toxicity_label", records[0])
+            self.assertNotIn("text_toxicity_score", records[0])
             self.assertGreaterEqual(records[0]["audio_level"], 0.0)
             self.assertLessEqual(records[0]["audio_level"], 1.0)
             summary = (Path(tmp_dir) / "summary.txt").read_text(encoding="utf-8")
@@ -69,12 +68,13 @@ class UiAppTests(unittest.TestCase):
             self.assertIn("Source:", summary)
             annotations_csv = (Path(tmp_dir) / "annotations.csv").read_text(encoding="utf-8")
             self.assertNotIn("speech_text", annotations_csv)
-            self.assertNotIn("ты совсем тупой", annotations_csv)
+            self.assertNotIn("text_toxicity_label", annotations_csv)
+            self.assertNotIn("text_toxicity_score", annotations_csv)
             preview_html = (Path(tmp_dir) / "ui_preview.html").read_text(encoding="utf-8")
             self.assertIn("audio-track", preview_html)
             self.assertIn("seek-slider", preview_html)
             self.assertNotIn("subtitle", preview_html)
-            self.assertNotIn("ты совсем тупой", preview_html)
+            self.assertNotIn("Toxicity:", preview_html)
             self.assertNotIn("<th>Speech</th>", preview_html)
 
     def test_pipeline_handles_empty_input(self) -> None:
@@ -99,7 +99,6 @@ class UiAppTests(unittest.TestCase):
                         metadata={
                             "hint_bbox": [10, 20, 100, 100],
                             "hint_face_emotion": "JOY",
-                            "speech_text": "ну конечно",
                             "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
                         },
                     ),
@@ -109,7 +108,6 @@ class UiAppTests(unittest.TestCase):
                         metadata={
                             "hint_bbox": [10, 20, 100, 100],
                             "hint_face_emotion": "NEUTRAL",
-                            "speech_text": "всё спокойно",
                             "voice_features": {"pitch": 0.3, "energy": 0.2, "tempo": 0.3},
                         },
                     ),
@@ -134,7 +132,6 @@ class UiAppTests(unittest.TestCase):
                         "timestamp_ms": 0,
                         "face_emotion": "JOY",
                         "face_confidence": 0.88,
-                        "speech_text": "тестовые субтитры",
                         "audio_level": 0.41,
                         "final_emotion": "JOY",
                     }
@@ -148,8 +145,8 @@ class UiAppTests(unittest.TestCase):
             self.assertIn("seek-slider", html_payload)
             self.assertIn("playback-rate", html_payload)
             self.assertIn("fullscreen-toggle", html_payload)
-            self.assertNotIn("тестовые субтитры", html_payload)
             self.assertNotIn("<th>Speech</th>", html_payload)
+            self.assertNotIn("Toxicity:", html_payload)
 
     def test_pipeline_keeps_audio_without_detected_face(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -162,7 +159,6 @@ class UiAppTests(unittest.TestCase):
                         timestamp_ms=0,
                         metadata={
                             "image": object(),
-                            "speech_text": "ура, получилось",
                             "voice_features": {"pitch": 0.7, "energy": 0.65, "tempo": 0.55},
                         },
                     )

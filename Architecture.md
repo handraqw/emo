@@ -38,22 +38,15 @@
 │ AudioPipeline   │  video audio / live microphone buffer
 └──────┬──────────┘
        │ segments + prosody features
-       ├───────────────┐
-       v               v
-┌──────────────┐   ┌───────────────┐
-│ SpeechToText │   │ VoiceEmotion  │
-│ Vosk         │   │ prosody rules │
-└──────┬───────┘   └──────┬────────┘
-       │ text             │ emotion probabilities
-       v                  │
-┌──────────────┐          │
-│ TextToxicity │──────────┘
-│ ru heuristics│
-└──────┬───────┘
-       │ text label + score
+       v
+┌───────────────┐
+│ VoiceEmotion  │
+│ prosody rules │
+└──────┬────────┘
+       │ emotion probabilities
        v
 ┌─────────────────┐
-│ FusionEngine    │── final emotion / CONFLICT
+│ FusionEngine    │── final emotion
 └──────┬──────────┘
        │
        v
@@ -67,11 +60,9 @@
 - `video_capture.iter_video_frames()` → `FramePacket`
 - `audio_pipeline.extract_speech_segments()` → `list[SpeechSegment]`
 - `audio_pipeline.build_live_speech_segment()` → live `SpeechSegment`
-- `SpeechToTextService.transcribe()` → transcript text
 - `FaceDetector.detect()` → `list[FaceDetection]`
 - `FaceTracker.assign_ids()` → `list[FaceDetection]`
 - `FaceEmotionInference.predict()` → `dict[str, float]`
-- `TextToxicityAnalyzer.analyze()` → toxicity score + label
 - `VoiceEmotionAnalyzer.analyze()` → voice emotion probabilities
 - `fuse_signals()` → final decision + triggered rules
 
@@ -81,7 +72,6 @@
 |---|---|---|
 | Video capture | OpenCV | explicit source error |
 | Face detection | OpenCV / MediaPipe | metadata-based bbox fallback only when metadata exists |
-| STT | Vosk | empty transcript |
 | Voice emotion | SER model | prosody heuristics |
 | UI | PySide6 | HTML preview |
 
@@ -93,7 +83,6 @@
 | Face detect + preprocess | 25–40 ms |
 | Face emotion inference | 15–30 ms |
 | Audio extraction / live buffer | 20–60 ms |
-| STT + text analysis | 40–90 ms |
 | Fusion + UI refresh | 5–10 ms |
 | **Total** | **≤ 200 ms target** |
 

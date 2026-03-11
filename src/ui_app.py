@@ -14,8 +14,6 @@ from face_model.inference_face_emotion import FaceEmotionInference
 from face_preprocess import preprocess_face
 from face_tracker import FaceTracker
 from fusion_engine import FusionDecision, FusionWeights, fuse_signals
-from speech_to_text import SpeechToTextService
-from text_toxicity import TextToxicityAnalyzer
 from utils.schemas import SpeechSegment
 from video_capture import iter_video_frames
 from video_capture import VideoSourceError
@@ -191,7 +189,6 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel'>
       <div class='final'>{html.escape(str(latest.get('final_emotion', 'N/A')))}</div>
       <p>Audio level: {audio_percent}%</p>
-      <p>Toxicity: {latest.get('text_toxicity_score', 0.0)}</p>
       <p>Frames processed: {stats['frames_processed']}</p>
       <p>Detections: {stats['detections']}</p>
       <p>Unique faces: {stats['unique_faces']}</p>
@@ -286,8 +283,6 @@ def _create_runtime() -> dict[str, object]:
         "face_model": FaceEmotionInference(
             checkpoint_path="experiments/example_face_baseline/checkpoint.json"
         ),
-        "stt": SpeechToTextService(),
-        "text_analyzer": TextToxicityAnalyzer(),
         "voice_analyzer": VoiceEmotionAnalyzer(),
         "face_history": {},
         "decision_history": {},
@@ -298,21 +293,17 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
     detector: FaceDetector = runtime["detector"]  # type: ignore[assignment]
     tracker: FaceTracker = runtime["tracker"]  # type: ignore[assignment]
     face_model: FaceEmotionInference = runtime["face_model"]  # type: ignore[assignment]
-    stt: SpeechToTextService = runtime["stt"]  # type: ignore[assignment]
-    text_analyzer: TextToxicityAnalyzer = runtime["text_analyzer"]  # type: ignore[assignment]
     voice_analyzer: VoiceEmotionAnalyzer = runtime["voice_analyzer"]  # type: ignore[assignment]
     face_history: dict[int, dict[str, float]] = runtime["face_history"]  # type: ignore[assignment]
     decision_history: dict[int, dict[str, float]] = runtime["decision_history"]  # type: ignore[assignment]
 
     detections = tracker.assign_ids(detector.detect(frame))
-    transcript = stt.transcribe(segment)
-    toxicity = text_analyzer.analyze(transcript)
     voice_probs = voice_analyzer.analyze(segment)
     audio_level = _audio_level_from_segment(segment)
 
     if not detections:
         neutral_face_probs = {"NEUTRAL": 1.0}
-        decision = fuse_signals(neutral_face_probs, voice_probs, toxicity, weights=FusionWeights())
+        decision = fuse_signals(neutral_face_probs, voice_probs, weights=FusionWeights())
         voice_emotion = max(voice_probs, key=voice_probs.get)
         return [
             {
@@ -322,8 +313,6 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
                 "face_emotion": "NO_FACE",
                 "face_confidence": 0.0,
                 "audio_level": audio_level,
-                "text_toxicity_label": toxicity["label"],
-                "text_toxicity_score": toxicity["score"],
                 "voice_emotion": voice_emotion,
                 "voice_confidence": round(voice_probs[voice_emotion], 2),
                 "final_emotion": decision.final_emotion,
@@ -338,7 +327,7 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
         face_probs = _smooth_scores(face_probs, face_history.get(int(detection.face_id or 0)))
         face_history[int(detection.face_id or 0)] = face_probs
         face_emotion = max(face_probs, key=face_probs.get)
-        decision = fuse_signals(face_probs, voice_probs, toxicity, weights=FusionWeights())
+        decision = fuse_signals(face_probs, voice_probs, weights=FusionWeights())
         decision = _build_smoothed_decision(decision, decision_history.get(int(detection.face_id or 0)))
         decision_history[int(detection.face_id or 0)] = decision.combined_scores
         voice_emotion = max(voice_probs, key=voice_probs.get)
@@ -350,8 +339,6 @@ def _analyze_frame(frame, segment: SpeechSegment, runtime: dict[str, object]) ->
                 "face_emotion": face_emotion,
                 "face_confidence": round(face_probs[face_emotion], 2),
                 "audio_level": audio_level,
-                "text_toxicity_label": toxicity["label"],
-                "text_toxicity_score": toxicity["score"],
                 "voice_emotion": voice_emotion,
                 "voice_confidence": round(voice_probs[voice_emotion], 2),
                 "final_emotion": decision.final_emotion,
@@ -872,7 +859,6 @@ def launch_gui(results_dir: str = "results") -> int:
                         f"Источник: {self._path or self._source}",
                         f"Face emotion: {record['face_emotion']} ({record['face_confidence']})",
                         f"Speech sentiment: {record['voice_emotion']} ({record['voice_confidence']})",
-                        f"Toxicity: {record['text_toxicity_label']} ({record['text_toxicity_score']})",
                         f"Audio level: {int(float(record.get('audio_level', 0.0)) * 100)}%",
                     ]
                 )

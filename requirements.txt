@@ -12,7 +12,6 @@ mediapipe==0.10.14
 PySide6==6.7.2
 
 # Audio / speech backends (optional at runtime; code falls back to metadata-driven stubs if unavailable)
-vosk==0.3.45
 librosa==0.10.2.post1
 soundfile==0.12.1
 imageio-ffmpeg==0.6.0
