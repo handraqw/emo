@@ -14,4 +14,6 @@ if "%EMO_RESULTS_DIR%"=="" (
     )
 )
 
+if not exist "%EMO_RESULTS_DIR%" mkdir "%EMO_RESULTS_DIR%"
+
 ".venv\Scripts\python.exe" src\ui_app.py --gui --results-dir "%EMO_RESULTS_DIR%"
