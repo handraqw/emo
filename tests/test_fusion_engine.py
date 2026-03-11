@@ -30,7 +30,7 @@ class FusionEngineTests(unittest.TestCase):
         decision = fuse_signals(
             face_probs={"ANGER": 0.7},
             voice_probs={"IRRITATION": 0.7},
-            weights=FusionWeights(face=0.1, voice=0.9, text=0.0),
+            weights=FusionWeights(face=0.1, voice=0.9),
         )
         self.assertEqual(decision.final_emotion, "IRRITATION")
 

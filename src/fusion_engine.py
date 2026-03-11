@@ -9,7 +9,6 @@ from utils.schemas import EMOTION_LABELS
 class FusionWeights:
     face: float = 0.45
     voice: float = 0.55
-    text: float = 0.0
 
 
 @dataclass(slots=True)
