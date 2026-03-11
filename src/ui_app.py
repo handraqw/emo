@@ -85,7 +85,6 @@ def _display_audio_level(record: dict, microphone_level: float = 0.0, source: st
 def _render_html_preview(records: list[dict], output_path: Path, source_ref: str | None) -> None:
     stats = _collect_run_stats(records, source_ref=source_ref)
     latest = records[-1] if records else {}
-    subtitle_text = html.escape(str(latest.get("speech_text", "") or "Субтитры появятся после распознавания речи"))
     audio_percent = int(min(max(float(latest.get("audio_level", 0.0)), 0.0), 1.0) * 100)
     source_path = Path(source_ref) if source_ref else None
     is_video_source = bool(
@@ -98,7 +97,6 @@ def _render_html_preview(records: list[dict], output_path: Path, source_ref: str
             "<tr>"
             f"<td>{item['timestamp_ms']}</td>"
             f"<td>{html.escape(str(item['face_emotion']))}</td>"
-            f"<td>{html.escape(str(item['speech_text']))}</td>"
             f"<td>{int(float(item.get('audio_level', 0.0)) * 100)}%</td>"
             f"<td>{html.escape(str(item['final_emotion']))}</td>"
             "</tr>"
@@ -159,7 +157,6 @@ body {{ font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #
 .transport-meta {{ display: inline-flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 14px; }}
 .seek-slider {{ flex: 1; accent-color: #fbbf24; min-width: 220px; }}
 .timecode {{ min-width: 118px; color: #cbd5e1; font-variant-numeric: tabular-nums; }}
-.subtitle {{ margin-top: 16px; padding: 12px 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.88); font-size: 18px; min-height: 52px; }}
 .audio-meter {{ margin-top: 16px; }}
 .audio-track {{ height: 18px; width: 100%; border-radius: 999px; overflow: hidden; background: #0f172a; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #334155; position: relative; }}
 .audio-track span:nth-child(1) {{ background: #16a34a; }}
@@ -180,7 +177,6 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <h1>Emotion AI System — Analysis Preview</h1>
     <p>Source: {html.escape(stats['source'])}</p>
     {video_markup}
-    <div class='subtitle'>{subtitle_text}</div>
     <div class='audio-meter'>
       <div class='audio-track'>
         <span></span><span></span><span></span>
@@ -193,7 +189,6 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel mono'>{html.escape(_render_summary(records, source_ref=source_ref))}</div>
     <div class='panel'>
       <div class='final'>{html.escape(str(latest.get('final_emotion', 'N/A')))}</div>
-      <p>Speech text: {html.escape(str(latest.get('speech_text', '')))}</p>
       <p>Audio level: {audio_percent}%</p>
       <p>Toxicity: {latest.get('text_toxicity_score', 0.0)}</p>
       <p>Frames processed: {stats['frames_processed']}</p>
@@ -203,7 +198,7 @@ td, th {{ border-bottom: 1px solid #334155; padding: 8px; text-align: left; vert
     <div class='panel'>
       <h3>Timeline</h3>
       <table>
-        <thead><tr><th>t, ms</th><th>Face</th><th>Speech</th><th>Audio</th><th>Final</th></tr></thead>
+        <thead><tr><th>t, ms</th><th>Face</th><th>Audio</th><th>Final</th></tr></thead>
         <tbody>{rows}</tbody>
       </table>
     </div>
@@ -630,15 +625,6 @@ def launch_gui(results_dir: str = "results") -> int:
                 self._video_player.positionChanged.connect(self._sync_video_position)
                 self._video_player.durationChanged.connect(self._sync_video_duration)
 
-            self.subtitle_label = QLabel("Субтитры появятся здесь после распознавания речи")
-            self.subtitle_label.setWordWrap(True)
-            self.subtitle_label.setMinimumHeight(56)
-            self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.subtitle_label.setStyleSheet(
-                "background:#0f172a;color:#e2e8f0;border-radius:14px;padding:12px;font-size:18px;"
-            )
-            left.addWidget(self.subtitle_label)
-
             self.audio_meter = AudioLevelWidget()
             left.addWidget(self.audio_meter)
 
@@ -657,8 +643,8 @@ def launch_gui(results_dir: str = "results") -> int:
             self.metrics.setMinimumHeight(160)
             right.addWidget(self.metrics)
 
-            self.timeline = QTableWidget(0, 5)
-            self.timeline.setHorizontalHeaderLabels(["t, ms", "Лицо", "Речь", "Аудио", "Итог"])
+            self.timeline = QTableWidget(0, 4)
+            self.timeline.setHorizontalHeaderLabels(["t, ms", "Лицо", "Аудио", "Итог"])
             self.timeline.horizontalHeader().setStretchLastSection(True)
             right.addWidget(self.timeline)
 
@@ -739,7 +725,6 @@ def launch_gui(results_dir: str = "results") -> int:
             self.timeline.setRowCount(0)
             self.metrics.clear()
             self.final_label.setText("Итоговая эмоция: анализ...")
-            self.subtitle_label.setText("Субтитры появятся здесь после распознавания речи")
             self.audio_meter.set_level(0.0)
             self.status.setText(f"Анализ: {path or source}")
             self._configure_video_player(path if source == "file" else None)
@@ -873,7 +858,6 @@ def launch_gui(results_dir: str = "results") -> int:
             values = [
                 str(record["timestamp_ms"]),
                 str(record["face_emotion"]),
-                str(record["speech_text"]),
                 f"{int(float(record.get('audio_level', 0.0)) * 100)}%",
                 str(record["final_emotion"]),
             ]
@@ -891,11 +875,9 @@ def launch_gui(results_dir: str = "results") -> int:
                         f"Speech sentiment: {record['voice_emotion']} ({record['voice_confidence']})",
                         f"Toxicity: {record['text_toxicity_label']} ({record['text_toxicity_score']})",
                         f"Audio level: {int(float(record.get('audio_level', 0.0)) * 100)}%",
-                        f"Текст: {record['speech_text'] or '—'}",
                     ]
                 )
             )
-            self.subtitle_label.setText(record["speech_text"] or "Субтитры появятся здесь после распознавания речи")
             level = _display_audio_level(record, microphone_level=self._microphone_level, source=self._source)
             self.audio_meter.set_level(level)
             self.status.setText(f"Последний кадр: {record['timestamp_ms']} ms")

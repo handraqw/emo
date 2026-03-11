@@ -67,8 +67,11 @@ class UiAppTests(unittest.TestCase):
             self.assertIn("Detections: 3", summary)
             self.assertIn("Source:", summary)
             preview_html = (Path(tmp_dir) / "ui_preview.html").read_text(encoding="utf-8")
-            self.assertIn("subtitle", preview_html)
             self.assertIn("audio-track", preview_html)
+            self.assertIn("seek-slider", preview_html)
+            self.assertNotIn("subtitle", preview_html)
+            self.assertNotIn("ты совсем тупой", preview_html)
+            self.assertNotIn("<th>Speech</th>", preview_html)
 
     def test_pipeline_handles_empty_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -116,7 +119,7 @@ class UiAppTests(unittest.TestCase):
             self.assertIn("Source: camera", summary)
             self.assertTrue((Path(tmp_dir) / "ui_preview.html").exists())
 
-    def test_html_preview_embeds_video_controls_for_uploaded_video(self) -> None:
+    def test_html_preview_embeds_video_controls_without_subtitles_for_uploaded_video(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             preview_path = Path(tmp_dir) / "ui_preview.html"
             video_path = Path(tmp_dir) / "sample.mp4"
@@ -141,9 +144,10 @@ class UiAppTests(unittest.TestCase):
             self.assertIn("seek-slider", html_payload)
             self.assertIn("playback-rate", html_payload)
             self.assertIn("fullscreen-toggle", html_payload)
-            self.assertIn("тестовые субтитры", html_payload)
+            self.assertNotIn("тестовые субтитры", html_payload)
+            self.assertNotIn("<th>Speech</th>", html_payload)
 
-    def test_pipeline_keeps_audio_and_subtitles_without_detected_face(self) -> None:
+    def test_pipeline_keeps_audio_without_detected_face(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             video_path = Path(tmp_dir) / "speaker.mp4"
             video_path.write_bytes(b"stub-video")
@@ -164,7 +168,6 @@ class UiAppTests(unittest.TestCase):
                 records = run_pipeline(source="file", path=str(video_path), results_dir=tmp_dir, max_frames=1)
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["face_emotion"], "NO_FACE")
-            self.assertEqual(records[0]["speech_text"], "ура, получилось")
             self.assertGreater(records[0]["audio_level"], 0.0)
             self.assertEqual(records[0]["source"], str(video_path))
 
